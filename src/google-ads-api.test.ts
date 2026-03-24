@@ -4,6 +4,7 @@ import {
 	GOOGLE_ADS_API_VERSION,
 	listAccessibleCustomers,
 	normalizeCustomerId,
+	resolveAdsLoginCustomerId,
 	searchStreamCollect,
 } from "./google-ads-api";
 
@@ -17,6 +18,28 @@ describe("escapeGaqlString", () => {
 describe("normalizeCustomerId", () => {
 	it("strips dashes", () => {
 		expect(normalizeCustomerId("123-456-7890")).toBe("1234567890");
+	});
+});
+
+describe("resolveAdsLoginCustomerId", () => {
+	const env = { GOOGLE_ADS_LOGIN_CUSTOMER_ID: "999-888" } as Env;
+
+	it("uses env when override is absent", () => {
+		expect(resolveAdsLoginCustomerId(env)).toBe("999888");
+	});
+
+	it("uses override when it contains digits", () => {
+		expect(resolveAdsLoginCustomerId(env, "111-222")).toBe("111222");
+	});
+
+	it("treats empty override as absent so env is used", () => {
+		expect(resolveAdsLoginCustomerId(env, "")).toBe("999888");
+	});
+
+	it("throws when env has no digits", () => {
+		expect(() => resolveAdsLoginCustomerId({ GOOGLE_ADS_LOGIN_CUSTOMER_ID: "" } as Env)).toThrow(
+			/GOOGLE_ADS_LOGIN_CUSTOMER_ID/,
+		);
 	});
 });
 

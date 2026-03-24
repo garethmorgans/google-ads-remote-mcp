@@ -157,7 +157,7 @@ npm run dev
 
 1. Use **Direct** transport (not Via Proxy) unless you configure a proxy token.  
 2. Connect to `/mcp`, complete Google (allowed domain).  
-3. For **full client lists**: **`list_accounts_with_names`** (default merge) or **`list_customer_clients`**.  
+3. For **full client lists**: **`list_accounts_with_names`** (default merge) or **`list_customer_clients`**. The response includes **`login_customer_id_used`** (digits only) so you can confirm which manager ID was sent as `login-customer-id` on each Ads request.  
 4. For **official-style reporting**: **`search`** with numeric `customer_id`.  
 5. For **chat-first** names: **`resolve_*`** and agency tools with `account_name`.
 

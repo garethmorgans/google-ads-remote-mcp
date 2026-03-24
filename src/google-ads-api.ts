@@ -82,6 +82,26 @@ export function listAccessibleLoginOptions(
 }
 
 /**
+ * Effective `login-customer-id` (digits only). Per [Google’s call-structure docs](https://developers.google.com/google-ads/api/docs/concepts/call-structure#cid),
+ * this must be the manager when accessing a client account under MCC.
+ *
+ * Tool override wins only when it contains at least one digit; empty string does not mask `GOOGLE_ADS_LOGIN_CUSTOMER_ID`
+ * (avoids sending a blank header).
+ */
+export function resolveAdsLoginCustomerId(env: Env, override?: string | null): string {
+	if (override != null && /\d/.test(override)) {
+		return normalizeCustomerId(override);
+	}
+	const fromEnv = normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ?? "");
+	if (!fromEnv) {
+		throw new Error(
+			"GOOGLE_ADS_LOGIN_CUSTOMER_ID is missing or invalid. Set this Worker secret to your manager (MCC) numeric customer ID.",
+		);
+	}
+	return fromEnv;
+}
+
+/**
  * Headers for Google Ads REST calls. `login-customer-id` must be the manager when accessing client accounts under MCC.
  */
 export function googleAdsRequestHeaders(
@@ -89,11 +109,11 @@ export function googleAdsRequestHeaders(
 	accessToken: string,
 	options: { loginCustomerId?: string; contentType?: string } = {},
 ): Record<string, string> {
-	const loginId = options.loginCustomerId ?? env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+	const loginId = resolveAdsLoginCustomerId(env, options.loginCustomerId);
 	const headers: Record<string, string> = {
 		authorization: `Bearer ${accessToken}`,
 		"developer-token": env.GOOGLE_ADS_DEVELOPER_TOKEN,
-		"login-customer-id": normalizeCustomerId(loginId),
+		"login-customer-id": loginId,
 	};
 	if (options.contentType) {
 		headers["content-type"] = options.contentType;

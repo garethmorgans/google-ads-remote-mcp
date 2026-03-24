@@ -10,6 +10,7 @@ import {
 	listAccessibleLoginOptions,
 	mergeSearchStreamOptions,
 	normalizeCustomerId,
+	resolveAdsLoginCustomerId,
 	searchStreamCollect,
 } from "./google-ads-api";
 import { buildOfficialSearchGaql } from "./google-ads-official-search";
@@ -113,7 +114,13 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 					maxClientRows: max_client_rows,
 					loginCustomerId: login_customer_id,
 				});
-				return textJson({ accounts, count: accounts.length, errors, sources });
+				return textJson({
+					accounts,
+					count: accounts.length,
+					errors,
+					sources,
+					login_customer_id_used: resolveAdsLoginCustomerId(env, login_customer_id),
+				});
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textJson({ error: message });
