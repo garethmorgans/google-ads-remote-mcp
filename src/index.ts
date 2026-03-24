@@ -1,6 +1,8 @@
+import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
+import { GoogleHandler } from "./google-handler";
 
 export class MyMCP extends McpAgent {
 	server = new McpServer({
@@ -21,7 +23,7 @@ export class MyMCP extends McpAgent {
 			},
 			async ({ include_manager_context }) => {
 				try {
-					const oauthToken = await getAccessToken(this.env);
+					const oauthToken = await getGoogleAdsAccessToken(this.env);
 					const customers = await listAccessibleCustomers(this.env, oauthToken);
 					const managerCustomerId = normalizeCustomerId(this.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
 
@@ -59,7 +61,7 @@ function normalizeCustomerId(customerId: string): string {
 	return customerId.replaceAll("-", "").trim();
 }
 
-function assertRequiredEnv(env: Env): void {
+function assertGoogleAdsEnv(env: Env): void {
 	const required = [
 		"GOOGLE_ADS_DEVELOPER_TOKEN",
 		"GOOGLE_ADS_LOGIN_CUSTOMER_ID",
@@ -75,8 +77,8 @@ function assertRequiredEnv(env: Env): void {
 	}
 }
 
-async function getAccessToken(env: Env): Promise<string> {
-	assertRequiredEnv(env);
+async function getGoogleAdsAccessToken(env: Env): Promise<string> {
+	assertGoogleAdsEnv(env);
 
 	const response = await fetch("https://oauth2.googleapis.com/token", {
 		method: "POST",
@@ -128,14 +130,11 @@ async function listAccessibleCustomers(
 	return payload.resourceNames ?? [];
 }
 
-export default {
-	fetch(request: Request, env: Env, ctx: ExecutionContext) {
-		const url = new URL(request.url);
-
-		if (url.pathname === "/mcp") {
-			return MyMCP.serve("/mcp").fetch(request, env, ctx);
-		}
-
-		return new Response("Not found", { status: 404 });
-	},
-};
+export default new OAuthProvider({
+	apiRoute: "/mcp",
+	apiHandler: MyMCP.serve("/mcp"),
+	authorizeEndpoint: "/authorize",
+	tokenEndpoint: "/token",
+	clientRegistrationEndpoint: "/register",
+	defaultHandler: GoogleHandler as any,
+});
