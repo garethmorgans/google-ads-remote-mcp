@@ -111,14 +111,16 @@ This project **extends** the read-only surface of [googleads/google-ads-mcp](htt
 - Cloudflare Workers + Durable Objects (`MyMCP`) + `OAuthProvider`
 - **HTTP**: `/mcp` (MCP), `/authorize`, `/callback`, `/token`, `/register`
 - **MCP gate**: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, KV `OAUTH_KV`
-- **Ads API**: `GOOGLE_ADS_DEVELOPER_TOKEN` + OAuth refresh token (`adwords` scope) + `GOOGLE_ADS_LOGIN_CUSTOMER_ID`; **`listAccessibleCustomers`** + **`searchStream`** only (no mutates)
+- **Ads API**: `GOOGLE_ADS_DEVELOPER_TOKEN` + OAuth refresh token (`adwords` scope) + `GOOGLE_ADS_LOGIN_CUSTOMER_ID`; **`listAccessibleCustomers`** + **`searchStream`** only (no mutates). Set **`GOOGLE_ADS_LOGIN_CUSTOMER_ID` to your manager (MCC) numeric customer ID** (digits only or hyphenated), not a leaf client account, so the `login-customer-id` header matches [Google’s access model](https://developers.google.com/google-ads/api/concepts/call-structure) when querying child accounts.
 
 ## Two OAuth credential pairs (both required)
 
 | Purpose | Secrets | Notes |
 |--------|---------|--------|
 | **Protect the MCP** | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Web client; redirect **`/callback`** only; scopes `email profile` |
-| **Google Ads API** | `GOOGLE_ADS_OAUTH_*`, `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Refresh token needs `https://www.googleapis.com/auth/adwords` |
+| **Google Ads API** | `GOOGLE_ADS_OAUTH_*`, `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Refresh token needs `https://www.googleapis.com/auth/adwords`; login ID = **MCC / top manager** used to reach client accounts |
+
+**Troubleshooting (MCC / child queries)**: `PERMISSION_DENIED` or “wrong customer” errors when using a leaf `customer_id` usually mean `GOOGLE_ADS_LOGIN_CUSTOMER_ID` is missing, typo’d, or set to a **client** instead of the **parent manager**. Confirm the secret in the dashboard or `npx wrangler secret list`, use digits-only form, redeploy after changes. Nested manager chains: optional tool arg **`login_customer_id`** overrides the header for that call.
 
 ## Prerequisites
 

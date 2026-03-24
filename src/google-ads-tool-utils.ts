@@ -11,6 +11,14 @@ export const matchModeSchema = z
 		"How to match names: 'contains' is best for conversational / fuzzy user input; 'exact' for precise names.",
 	);
 
+/** Optional MCC for Google Ads `login-customer-id` (required context when querying leaf accounts under a manager). */
+export const loginCustomerIdSchema = z
+	.string()
+	.optional()
+	.describe(
+		"Manager/MCC customer ID for the login-customer-id header (digits or dashed). Defaults to GOOGLE_ADS_LOGIN_CUSTOMER_ID secret.",
+	);
+
 const dateRangeEnum = z.enum([
 	"LAST_7_DAYS",
 	"LAST_14_DAYS",

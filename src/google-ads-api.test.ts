@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	escapeGaqlString,
 	GOOGLE_ADS_API_VERSION,
+	listAccessibleCustomers,
 	normalizeCustomerId,
 	searchStreamCollect,
 } from "./google-ads-api";
@@ -67,5 +68,54 @@ describe("searchStreamCollect", () => {
 			maxRows: 2,
 		});
 		expect(rows).toHaveLength(2);
+	});
+
+	it("uses options.loginCustomerId for login-customer-id when set", async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo, init?: RequestInit) => {
+			const headers = init?.headers as Record<string, string>;
+			expect(headers["login-customer-id"]).toBe("8881112222");
+			return new Response('{"results":[]}\n', { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		await searchStreamCollect(env, "tok", "123", "SELECT 1", {
+			maxRows: 5,
+			loginCustomerId: "888-111-2222",
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("listAccessibleCustomers", () => {
+	const env = {
+		GOOGLE_ADS_DEVELOPER_TOKEN: "dev",
+		GOOGLE_ADS_LOGIN_CUSTOMER_ID: "999",
+	} as Env;
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("sends login-customer-id from env by default", async () => {
+		const fetchMock = vi.fn(async (input: RequestInfo, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.url;
+			expect(url).toContain(":listAccessibleCustomers");
+			const headers = init?.headers as Record<string, string>;
+			expect(headers["login-customer-id"]).toBe("999");
+			return new Response(JSON.stringify({ resourceNames: ["customers/1"] }), { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const r = await listAccessibleCustomers(env, "tok");
+		expect(r).toEqual(["customers/1"]);
+	});
+
+	it("overrides login-customer-id when options.loginCustomerId is set", async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo, init?: RequestInit) => {
+			const headers = init?.headers as Record<string, string>;
+			expect(headers["login-customer-id"]).toBe("777");
+			return new Response(JSON.stringify({ resourceNames: [] }), { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		await listAccessibleCustomers(env, "tok", { loginCustomerId: "777" });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 });

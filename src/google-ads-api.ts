@@ -68,18 +68,50 @@ export async function getGoogleAdsAccessToken(env: Env): Promise<string> {
 	return token.access_token;
 }
 
+export type ListAccessibleCustomersOptions = {
+	/** Manager/MCC ID for login-customer-id when disambiguating access (defaults to GOOGLE_ADS_LOGIN_CUSTOMER_ID). */
+	loginCustomerId?: string;
+};
+
+/** Optional third argument for listAccessibleCustomers from an MCP override. */
+export function listAccessibleLoginOptions(
+	loginCustomerIdOverride?: string,
+): ListAccessibleCustomersOptions | undefined {
+	if (!loginCustomerIdOverride?.replace(/\D/g, "")) return undefined;
+	return { loginCustomerId: normalizeCustomerId(loginCustomerIdOverride) };
+}
+
+/**
+ * Headers for Google Ads REST calls. `login-customer-id` must be the manager when accessing client accounts under MCC.
+ */
+export function googleAdsRequestHeaders(
+	env: Env,
+	accessToken: string,
+	options: { loginCustomerId?: string; contentType?: string } = {},
+): Record<string, string> {
+	const loginId = options.loginCustomerId ?? env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+	const headers: Record<string, string> = {
+		authorization: `Bearer ${accessToken}`,
+		"developer-token": env.GOOGLE_ADS_DEVELOPER_TOKEN,
+		"login-customer-id": normalizeCustomerId(loginId),
+	};
+	if (options.contentType) {
+		headers["content-type"] = options.contentType;
+	}
+	return headers;
+}
+
 export async function listAccessibleCustomers(
 	env: Env,
 	accessToken: string,
+	options?: ListAccessibleCustomersOptions,
 ): Promise<string[]> {
 	const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers:listAccessibleCustomers`;
 	const response = await fetch(url, {
 		method: "GET",
-		headers: {
-			authorization: `Bearer ${accessToken}`,
-			"developer-token": env.GOOGLE_ADS_DEVELOPER_TOKEN,
-			"login-customer-id": normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID),
-		},
+		headers: googleAdsRequestHeaders(env, accessToken, {
+			loginCustomerId: options?.loginCustomerId,
+		}),
 	});
 
 	if (!response.ok) {
@@ -98,7 +130,21 @@ export function escapeGaqlString(value: string): string {
 
 export type SearchStreamOptions = {
 	maxRows?: number;
+	/** Override login-customer-id (MCC) for this request; defaults to GOOGLE_ADS_LOGIN_CUSTOMER_ID. */
+	loginCustomerId?: string;
 };
+
+/** Merge optional MCC override into searchStream options (digits-only header value). */
+export function mergeSearchStreamOptions(
+	base: SearchStreamOptions,
+	loginCustomerIdOverride?: string,
+): SearchStreamOptions {
+	const out = { ...base };
+	if (loginCustomerIdOverride?.replace(/\D/g, "")) {
+		out.loginCustomerId = normalizeCustomerId(loginCustomerIdOverride);
+	}
+	return out;
+}
 
 /**
  * Collect rows from googleAds:searchStream (streaming JSON chunks).
@@ -116,12 +162,10 @@ export async function searchStreamCollect(
 
 	const response = await fetch(url, {
 		method: "POST",
-		headers: {
-			authorization: `Bearer ${accessToken}`,
-			"content-type": "application/json",
-			"developer-token": env.GOOGLE_ADS_DEVELOPER_TOKEN,
-			"login-customer-id": normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID),
-		},
+		headers: googleAdsRequestHeaders(env, accessToken, {
+			loginCustomerId: options.loginCustomerId,
+			contentType: "application/json",
+		}),
 		body: JSON.stringify({ query }),
 	});
 

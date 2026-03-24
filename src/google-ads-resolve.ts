@@ -65,12 +65,18 @@ function getStr(obj: Record<string, unknown>, ...keys: string[]): string | undef
 	return undefined;
 }
 
+export type ResolveStreamOptions = {
+	/** MCC login-customer-id override for searchStream (defaults to env). */
+	loginCustomerId?: string;
+};
+
 export async function resolveCustomerByName(
 	env: Env,
 	accessToken: string,
 	accountName: string,
 	matchMode: MatchMode,
 	accessibleResourceNames: string[],
+	streamOpts?: ResolveStreamOptions,
 ): Promise<ResolvePayload> {
 	const candidates: Array<Record<string, unknown>> = [];
 	const seen = new Set<string>();
@@ -79,7 +85,12 @@ export async function resolveCustomerByName(
 		const cid = customerIdFromResourceName(rn);
 		const where = nameWhereClause("customer.descriptive_name", accountName, matchMode);
 		const query = `SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager, customer.resource_name FROM customer WHERE ${where}`;
-		const rows = await searchStreamCollect(env, accessToken, cid, query, { maxRows: RESOLVER_MAX_ROWS });
+		const rows = await searchStreamCollect(env, accessToken, cid, query, {
+			maxRows: RESOLVER_MAX_ROWS,
+			...(streamOpts?.loginCustomerId
+				? { loginCustomerId: normalizeCustomerId(streamOpts.loginCustomerId) }
+				: {}),
+		});
 		for (const row of rows) {
 			const c = rowCustomer(row);
 			if (!c) continue;
@@ -111,9 +122,15 @@ export async function resolveCampaignByName(
 		campaignName: string;
 		matchMode: MatchMode;
 		accessibleResourceNames: string[];
+		loginCustomerId?: string;
 	},
 ): Promise<ResolvePayload> {
 	let customerId = params.customerId ? params.customerId.replace(/\D/g, "") : undefined;
+
+	const loginStream =
+		params.loginCustomerId != null && params.loginCustomerId !== ""
+			? { loginCustomerId: normalizeCustomerId(params.loginCustomerId) }
+			: undefined;
 
 	if (!customerId && params.accountName) {
 		const cust = await resolveCustomerByName(
@@ -122,6 +139,7 @@ export async function resolveCampaignByName(
 			params.accountName,
 			params.matchMode,
 			params.accessibleResourceNames,
+			loginStream,
 		);
 		if (cust.match_count !== 1) {
 			return {
@@ -143,7 +161,10 @@ export async function resolveCampaignByName(
 
 	const where = nameWhereClause("campaign.name", params.campaignName, params.matchMode);
 	const query = `SELECT campaign.id, campaign.name, campaign.status, campaign.resource_name FROM campaign WHERE ${where}`;
-	const rows = await searchStreamCollect(env, accessToken, customerId, query, { maxRows: RESOLVER_MAX_ROWS });
+	const rows = await searchStreamCollect(env, accessToken, customerId, query, {
+		maxRows: RESOLVER_MAX_ROWS,
+		...(loginStream ?? {}),
+	});
 	const candidates: Array<Record<string, unknown>> = [];
 	const seen = new Set<string>();
 	for (const row of rows) {
@@ -175,6 +196,7 @@ export async function resolveAdGroupByName(
 		adGroupName: string;
 		matchMode: MatchMode;
 		accessibleResourceNames: string[];
+		loginCustomerId?: string;
 	},
 ): Promise<ResolvePayload> {
 	const camp = await resolveCampaignByName(env, accessToken, {
@@ -183,6 +205,7 @@ export async function resolveAdGroupByName(
 		campaignName: params.campaignName,
 		matchMode: params.matchMode,
 		accessibleResourceNames: params.accessibleResourceNames,
+		loginCustomerId: params.loginCustomerId,
 	});
 	if (camp.match_count !== 1) {
 		return {
@@ -195,7 +218,14 @@ export async function resolveAdGroupByName(
 
 	const whereName = nameWhereClause("ad_group.name", params.adGroupName, params.matchMode);
 	const query = `SELECT ad_group.id, ad_group.name, ad_group.status, ad_group.resource_name, campaign.id FROM ad_group WHERE campaign.id = ${campaignId} AND ${whereName}`;
-	const rows = await searchStreamCollect(env, accessToken, customerId, query, { maxRows: RESOLVER_MAX_ROWS });
+	const agLogin =
+		params.loginCustomerId != null && params.loginCustomerId !== ""
+			? { loginCustomerId: normalizeCustomerId(params.loginCustomerId) }
+			: {};
+	const rows = await searchStreamCollect(env, accessToken, customerId, query, {
+		maxRows: RESOLVER_MAX_ROWS,
+		...agLogin,
+	});
 	const candidates: Array<Record<string, unknown>> = [];
 	const seen = new Set<string>();
 	for (const row of rows) {
@@ -271,6 +301,7 @@ export function dateRangeDuringClause(range: string): string {
 export type ListCustomerClientsOptions = {
 	onlyLeafAccounts?: boolean;
 	maxRows?: number;
+	loginCustomerId?: string;
 };
 
 /**
@@ -293,8 +324,13 @@ export async function fetchCustomerClients(
 	if (options.onlyLeafAccounts) {
 		query += " WHERE customer_client.manager = FALSE";
 	}
+	const streamLogin =
+		options.loginCustomerId != null && options.loginCustomerId !== ""
+			? { loginCustomerId: normalizeCustomerId(options.loginCustomerId) }
+			: {};
 	return searchStreamCollect(env, accessToken, normalizeCustomerId(managerCustomerId), query, {
 		maxRows: cap,
+		...streamLogin,
 	});
 }
 
@@ -303,6 +339,8 @@ export type ListAccountsMergedOptions = {
 	onlyLeafAccounts: boolean;
 	managerCustomerId?: string;
 	maxClientRows?: number;
+	/** login-customer-id for all searchStream calls in this merge (leaf + customer_client). */
+	loginCustomerId?: string;
 };
 
 export async function listAccountsWithNamesMerged(
@@ -317,6 +355,10 @@ export async function listAccountsWithNamesMerged(
 }> {
 	const errors: Array<{ customerId?: string; phase: string; message: string }> = [];
 	const map: MergeAccountMap = new Map();
+	const streamLogin =
+		options.loginCustomerId != null && options.loginCustomerId !== ""
+			? { loginCustomerId: normalizeCustomerId(options.loginCustomerId) }
+			: {};
 
 	for (const rn of accessibleResourceNames) {
 		let cid: string;
@@ -332,7 +374,7 @@ export async function listAccountsWithNamesMerged(
 		try {
 			const query =
 				"SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager, customer.resource_name FROM customer";
-			const rows = await searchStreamCollect(env, accessToken, cid, query, { maxRows: 1 });
+			const rows = await searchStreamCollect(env, accessToken, cid, query, { maxRows: 1, ...streamLogin });
 			const parsed = accessibleRowToAccountEntry(cid, rows[0] ?? null);
 			if (parsed) map.set(parsed.customerId, parsed.entry);
 		} catch (e) {
@@ -359,6 +401,7 @@ export async function listAccountsWithNamesMerged(
 			const clientRows = await fetchCustomerClients(env, accessToken, managerId, {
 				onlyLeafAccounts: options.onlyLeafAccounts,
 				maxRows: options.maxClientRows,
+				loginCustomerId: options.loginCustomerId,
 			});
 			customer_client_rows = clientRows.length;
 			mergeClientRowsIntoMap(map, clientRows);
