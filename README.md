@@ -1,74 +1,64 @@
 # Google Ads Remote MCP (Read-Only) on Cloudflare
 
-This project hosts a remote MCP server on Cloudflare Workers for **read-only Google Ads** access. It mirrors the **MCP OAuth + Google sign-in** pattern from the Google Analytics MCP: clients must complete OAuth before using `/mcp`, with a **domain allowlist** (default `@herdl.com`).
+Remote MCP server for **read-only Google Ads** reporting and analysis. It uses **MCP OAuth** (Claude Cowork / Inspector) plus **Google sign-in** with a **domain allowlist** (default `@herdl.com`).
 
-Current MCP surface:
+Tools are **name-first** for conversational use: account **descriptive names**, **campaign names**, and **ad group names**—not numeric IDs. Optional `customer_id` / overrides exist for power users after disambiguation.
 
-- `list_accessible_customers`
+## MCP tools (read-only)
+
+| Tool | Purpose |
+|------|---------|
+| `list_accessible_customers` | Raw resource names from `customers:listAccessibleCustomers`. |
+| `list_accounts_with_names` | Maps each accessible account to `customer.id` + `descriptive_name` (+ currency, manager flag). |
+| `resolve_customer` | Match `account_name` → 0/1/N customer candidates (no auto-pick if N > 1). |
+| `resolve_campaign` | Match `campaign_name` + `account_name` (or `customer_id`) → campaign candidates. |
+| `resolve_ad_group` | Match `ad_group_name` + campaign + account. |
+| `get_account_performance_by_name` | Account-level daily metrics (`customer` + `segments.date`). |
+| `get_campaign_performance_by_name` | Campaign daily metrics. |
+| `list_ad_groups_by_campaign_name` | Ad groups under a resolved campaign. |
+| `get_keyword_performance_by_names` | `keyword_view` metrics; optional `ad_group_name`. |
+| `get_search_terms_by_campaign_name` | `search_term_view` for a campaign. |
+| `gaql_search` | Expert escape hatch: full GAQL; requires **exactly one** of `account_name` or `customer_id`. Max rows capped (default 10,000). |
+
+**`match_mode`**: `contains` (default, chat-friendly) or `exact`. **Date presets**: `LAST_7_DAYS`, `LAST_14_DAYS`, `LAST_30_DAYS`, `LAST_90_DAYS`, `THIS_MONTH`, `LAST_MONTH`, `THIS_QUARTER`, `LAST_QUARTER`.
+
+**Disambiguation**: If a resolver returns `match_count` ≠ 1, curated report tools return JSON with `report: "not_run_needs_resolution"` and a `candidates` list—Claude should ask the user or refine the name; it must not guess.
 
 ## Architecture
 
-- Runtime: Cloudflare Workers + Durable Object MCP server
-- **MCP OAuth 2.1**: `/authorize`, `/token`, `/register` — `/mcp` is handled by `OAuthProvider`
-- **Google OAuth** (email + profile): gates who may connect; KV-backed state + `__Host-CONSENTED_STATE` cookie validation (**fail closed**)
-- **Google Ads API**: server uses a **separate** OAuth refresh token + developer token + login-customer-id for `listAccessibleCustomers` (no Analytics-style service account)
+- Cloudflare Workers + Durable Objects (`MyMCP`) + `OAuthProvider`
+- **HTTP**: `/mcp` (MCP), `/authorize`, `/callback`, `/token`, `/register`
+- **MCP gate**: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Google OAuth `email profile`), KV `OAUTH_KV`
+- **Ads data plane**: `GOOGLE_ADS_DEVELOPER_TOKEN` + refresh token (`adwords` scope) + `GOOGLE_ADS_LOGIN_CUSTOMER_ID`; calls `listAccessibleCustomers` and `googleAds:searchStream` only (no mutates)
+
+OAuth clients for **MCP sign-in** and **Ads API** may differ; see table below.
 
 ## Two OAuth credential pairs (both required)
 
 | Purpose | Secrets | Notes |
 |--------|---------|--------|
-| **Protect the MCP** (who can connect) | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Web app client; redirect URI must be **`/callback`**, not `/mcp`; scopes `email profile` |
-| **Call Google Ads API** | `GOOGLE_ADS_OAUTH_*`, `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Refresh token must include `https://www.googleapis.com/auth/adwords` |
-
-They can be different OAuth clients in the same GCP project, or you can reuse one client **only if** it supports both redirect flows and token grants you need.
+| **Protect the MCP** | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Web client; redirect **`/callback`** only; scopes `email profile` |
+| **Google Ads API** | `GOOGLE_ADS_OAUTH_*`, `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` | Refresh token needs `https://www.googleapis.com/auth/adwords` |
 
 ## Prerequisites
 
-- Google Cloud: **Google Ads API** enabled
-- **OAuth 2.0 Client (Web application)** with authorized redirect URIs:
-  - `http://localhost:8787/callback` (local; port from `wrangler dev` if different)
-  - `https://<your-worker>.workers.dev/callback` (production)
-  - **Must be `/callback` — not `/mcp`**
-- **KV namespace** `OAUTH_KV` (see `wrangler.jsonc`)
+- Google Cloud: **Google Ads API** enabled  
+- **OAuth Web client** redirect URIs: `http://localhost:8787/callback`, `https://<worker>/callback` (**not** `/mcp`)  
+- KV namespace `OAUTH_KV` in [wrangler.jsonc](wrangler.jsonc)
 
-Optional Worker secrets:
-
-- `ALLOWED_EMAIL_DOMAIN` — default `herdl.com` (no leading `@`)
-- `HOSTED_DOMAIN` — Google OAuth `hd` (Workspace hint)
-
-## KV setup
-
-If you need a new namespace:
-
-```bash
-npx wrangler kv namespace create OAUTH_KV
-```
-
-Put the returned `id` in [wrangler.jsonc](wrangler.jsonc) under `kv_namespaces`.
+Optional secrets: `ALLOWED_EMAIL_DOMAIN`, `HOSTED_DOMAIN`
 
 ## Worker secrets
 
 ```bash
-# MCP gate (Google sign-in)
 npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
-
-# Google Ads API (read-only tool)
 npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
 npx wrangler secret put GOOGLE_ADS_OAUTH_CLIENT_ID
 npx wrangler secret put GOOGLE_ADS_OAUTH_CLIENT_SECRET
 npx wrangler secret put GOOGLE_ADS_OAUTH_REFRESH_TOKEN
 npx wrangler secret put GOOGLE_ADS_LOGIN_CUSTOMER_ID
 ```
-
-Optional:
-
-```bash
-npx wrangler secret put ALLOWED_EMAIL_DOMAIN
-npx wrangler secret put HOSTED_DOMAIN
-```
-
-Manager account example: `6792590365` (digits only in env).
 
 ## Local development
 
@@ -79,14 +69,13 @@ npm test
 npm run dev
 ```
 
-- MCP URL: `http://localhost:8787/mcp`
+- MCP: `http://localhost:8787/mcp`
 
-## Local MCP Inspector
+### MCP Inspector / Claude Cowork
 
-1. `npm run dev`
-2. MCP Inspector → Streamable HTTP → `http://localhost:8787/mcp`
-3. Complete OAuth (Google user must be on the allowed domain)
-4. List tools → `list_accessible_customers`
+1. Connect to `/mcp` and complete Google (allowed domain).  
+2. Prefer **`list_accounts_with_names`** or **`resolve_*`** before running reports.  
+3. Use **`gaql_search`** only for custom GAQL; it still needs `account_name` or `customer_id`.
 
 ## Deploy
 
@@ -94,23 +83,13 @@ npm run dev
 npm run deploy
 ```
 
-Production MCP URL: `https://<your-worker>.workers.dev/mcp`
+## Limits
 
-## MCP client example (Claude Desktop via mcp-remote)
-
-```json
-{
-  "mcpServers": {
-    "google-ads-remote": {
-      "command": "npx",
-      "args": ["mcp-remote@latest", "https://<your-worker-subdomain>.workers.dev/mcp"]
-    }
-  }
-}
-```
+- **`searchStream` row cap**: default **10,000** rows per tool call (`gaql_search` `max_rows`); resolver queries cap at **50** matches per stage.
+- Read-only: no `Mutate` calls.
 
 ## References
 
-- Google Ads MCP inspiration: https://github.com/googleads/google-ads-mcp
-- Google Ads API: https://developers.google.com/google-ads/api
-- Cloudflare remote MCP + auth: https://developers.cloudflare.com/agents/guides/remote-mcp-server/#add-authentication
+- [googleads/google-ads-mcp](https://github.com/googleads/google-ads-mcp)  
+- [Google Ads API / GAQL](https://developers.google.com/google-ads/api/docs/query/overview)  
+- [Remote MCP + auth (Cloudflare)](https://developers.cloudflare.com/agents/guides/remote-mcp-server/#add-authentication)
