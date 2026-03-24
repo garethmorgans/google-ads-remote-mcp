@@ -1,45 +1,26 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import * as Q from "./google-ads-agency-queries";
+import { registerAgencyTools } from "./google-ads-agency-tools";
 import {
+	CUSTOMER_CLIENT_MAX_ROWS,
 	DEFAULT_SEARCH_MAX_ROWS,
 	getGoogleAdsAccessToken,
 	listAccessibleCustomers,
 	normalizeCustomerId,
 	searchStreamCollect,
 } from "./google-ads-api";
+import { buildOfficialSearchGaql } from "./google-ads-official-search";
 import {
 	dateRangeDuringClause,
-	listAccountsWithNames,
+	fetchCustomerClients,
+	listAccountsWithNamesMerged,
 	resolveAdGroupByName,
 	resolveCampaignByName,
 	resolveCustomerByName,
 	type ResolvePayload,
 } from "./google-ads-resolve";
-
-function textJson(payload: unknown) {
-	return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
-}
-
-const matchModeSchema = z
-	.enum(["exact", "contains"])
-	.default("contains")
-	.describe(
-		"How to match names: 'contains' is best for conversational / fuzzy user input; 'exact' for precise names.",
-	);
-
-const dateRangeSchema = z
-	.enum([
-		"LAST_7_DAYS",
-		"LAST_14_DAYS",
-		"LAST_30_DAYS",
-		"LAST_90_DAYS",
-		"THIS_MONTH",
-		"LAST_MONTH",
-		"THIS_QUARTER",
-		"LAST_QUARTER",
-	])
-	.default("LAST_30_DAYS")
-	.describe("Preset date range for metrics (segments.date DURING …).");
+import { dateRangeSchema, matchModeSchema, textJson } from "./google-ads-tool-utils";
 
 function blockUnlessResolved(res: ResolvePayload, need: "customer" | "campaign" | "ad_group"): ResolvePayload | null {
 	if (res.match_count !== 1) return res;
@@ -53,17 +34,27 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 	server.tool(
 		"list_accessible_customers",
 		{
+			ids_only: z
+				.boolean()
+				.default(false)
+				.describe(
+					"When true, return only numeric customer IDs like the official google-ads-mcp (no resource name prefixes).",
+				),
 			include_manager_context: z
 				.boolean()
 				.default(true)
 				.describe(
-					"When true, include the configured manager login-customer-id in the response.",
+					"When true, include the configured manager login-customer-id in the response (ignored if ids_only).",
 				),
 		},
-		async ({ include_manager_context }) => {
+		async ({ ids_only, include_manager_context }) => {
 			try {
 				const token = await getGoogleAdsAccessToken(env);
 				const customers = await listAccessibleCustomers(env, token);
+				if (ids_only) {
+					const ids = customers.map((rn) => rn.replace(/^customers\//, ""));
+					return textJson(ids);
+				}
 				const managerCustomerId = normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
 				return textJson({
 					customers,
@@ -78,13 +69,111 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 
 	server.tool(
 		"list_accounts_with_names",
-		{},
-		async () => {
+		{
+			include_customer_clients: z
+				.boolean()
+				.default(true)
+				.describe("When true (default), merge MCC customer_client links with listAccessibleCustomers (deduped)."),
+			only_leaf_accounts: z
+				.boolean()
+				.default(false)
+				.describe("When true, only non-manager clients when merging customer_client."),
+			manager_customer_id: z
+				.string()
+				.optional()
+				.describe("Manager ID for customer_client query; defaults to GOOGLE_ADS_LOGIN_CUSTOMER_ID."),
+			max_client_rows: z
+				.number()
+				.int()
+				.positive()
+				.max(CUSTOMER_CLIENT_MAX_ROWS)
+				.optional()
+				.describe(`Max customer_client rows (${CUSTOMER_CLIENT_MAX_ROWS} cap).`),
+		},
+		async ({
+			include_customer_clients,
+			only_leaf_accounts,
+			manager_customer_id,
+			max_client_rows,
+		}) => {
 			try {
 				const token = await getGoogleAdsAccessToken(env);
 				const rns = await listAccessibleCustomers(env, token);
-				const accounts = await listAccountsWithNames(env, token, rns);
-				return textJson({ accounts, count: accounts.length });
+				const { accounts, errors, sources } = await listAccountsWithNamesMerged(env, token, rns, {
+					includeCustomerClients: include_customer_clients,
+					onlyLeafAccounts: only_leaf_accounts,
+					managerCustomerId: manager_customer_id,
+					maxClientRows: max_client_rows,
+				});
+				return textJson({ accounts, count: accounts.length, errors, sources });
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return textJson({ error: message });
+			}
+		},
+	);
+
+	server.tool(
+		"list_customer_clients",
+		{
+			account_name: z
+				.string()
+				.optional()
+				.describe(
+					"Optional manager account descriptive name. If omitted with customer_id, uses GOOGLE_ADS_LOGIN_CUSTOMER_ID.",
+				),
+			customer_id: z
+				.string()
+				.optional()
+				.describe("Manager customer ID (digits). Use for MCC root when listing linked client accounts."),
+			match_mode: matchModeSchema,
+			only_leaf_accounts: z
+				.boolean()
+				.default(false)
+				.describe("When true, add customer_client.manager = FALSE (non-manager / leaf links)."),
+			max_rows: z
+				.number()
+				.int()
+				.positive()
+				.max(CUSTOMER_CLIENT_MAX_ROWS)
+				.optional()
+				.describe(`Max rows (cap ${CUSTOMER_CLIENT_MAX_ROWS}).`),
+		},
+		async ({ account_name, customer_id, match_mode, only_leaf_accounts, max_rows }) => {
+			try {
+				const token = await getGoogleAdsAccessToken(env);
+				const rns = await listAccessibleCustomers(env, token);
+				let managerId = customer_id ? normalizeCustomerId(customer_id) : undefined;
+				if (!managerId && account_name?.trim()) {
+					const resolved = await resolveCustomerByName(
+						env,
+						token,
+						account_name.trim(),
+						match_mode,
+						rns,
+					);
+					if (resolved.match_count !== 1) {
+						return textJson({
+							...resolved,
+							report: "not_run_needs_resolution",
+							hint: "Provide a single manager match, or pass customer_id, or omit both to use login MCC.",
+						});
+					}
+					managerId = String(resolved.candidates[0].customerId ?? "");
+				}
+				if (!managerId) {
+					managerId = normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+				}
+				const rows = await fetchCustomerClients(env, token, managerId, {
+					onlyLeafAccounts: only_leaf_accounts,
+					maxRows: max_rows,
+				});
+				return textJson({
+					manager_customer_id: managerId,
+					row_count: rows.length,
+					only_leaf_accounts,
+					rows,
+				});
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textJson({ error: message });
@@ -228,7 +317,7 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
 				const campaignId = String(resolved.candidates[0].campaignId);
 				const during = dateRangeDuringClause(date_range);
-				const query = `SELECT campaign.name, segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.ctr, metrics.conversions, metrics.conversions_value FROM campaign WHERE campaign.id = ${campaignId} AND ${during}`;
+				const query = Q.queryCampaignPerformanceById(campaignId, during, true);
 				const rows = await searchStreamCollect(env, token, customerId, query, {});
 				return textJson({
 					resolved_campaign: resolved.candidates[0],
@@ -243,6 +332,49 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 		},
 	);
 
+	const listAdGroupsHandler = async (args: {
+		account_name?: string;
+		customer_id?: string;
+		campaign_name: string;
+		match_mode: "exact" | "contains";
+		date_range?: z.infer<typeof dateRangeSchema>;
+		include_metrics?: boolean;
+		max_rows?: number;
+	}) => {
+		const {
+			account_name,
+			customer_id,
+			campaign_name,
+			match_mode,
+			date_range,
+			include_metrics,
+			max_rows,
+		} = args;
+		const token = await getGoogleAdsAccessToken(env);
+		const rns = await listAccessibleCustomers(env, token);
+		const resolved = await resolveCampaignByName(env, token, {
+			customerId: customer_id ? normalizeCustomerId(customer_id) : undefined,
+			accountName: account_name,
+			campaignName: campaign_name,
+			matchMode: match_mode,
+			accessibleResourceNames: rns,
+		});
+		const block = blockUnlessResolved(resolved, "campaign");
+		if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
+		const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
+		const campaignId = String(resolved.candidates[0].campaignId);
+		const withMetrics = include_metrics ?? false;
+		const during = withMetrics ? dateRangeDuringClause(date_range ?? "LAST_30_DAYS") : "";
+		const query = Q.queryAdGroupsByCampaign(campaignId, during, withMetrics);
+		const cap = max_rows ?? 500;
+		const rows = await searchStreamCollect(env, token, customerId, query, { maxRows: cap });
+		return textJson({
+			resolved_campaign: resolved.candidates[0],
+			row_count: rows.length,
+			rows,
+		});
+	};
+
 	server.tool(
 		"list_ad_groups_by_campaign_name",
 		{
@@ -250,29 +382,37 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 			customer_id: z.string().optional(),
 			campaign_name: z.string().min(1),
 			match_mode: matchModeSchema,
+			date_range: dateRangeSchema.optional().describe("Required when include_metrics is true."),
+			include_metrics: z
+				.boolean()
+				.default(false)
+				.describe("When true, includes impressions, CTR, CPA for the date_range (default LAST_30_DAYS)."),
+			max_rows: z.number().int().positive().max(DEFAULT_SEARCH_MAX_ROWS).optional(),
 		},
-		async ({ account_name, customer_id, campaign_name, match_mode }) => {
+		async (args) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token);
-				const resolved = await resolveCampaignByName(env, token, {
-					customerId: customer_id ? normalizeCustomerId(customer_id) : undefined,
-					accountName: account_name,
-					campaignName: campaign_name,
-					matchMode: match_mode,
-					accessibleResourceNames: rns,
-				});
-				const block = blockUnlessResolved(resolved, "campaign");
-				if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
-				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
-				const campaignId = String(resolved.candidates[0].campaignId);
-				const query = `SELECT ad_group.id, ad_group.name, ad_group.status FROM ad_group WHERE campaign.id = ${campaignId}`;
-				const rows = await searchStreamCollect(env, token, customerId, query, { maxRows: 500 });
-				return textJson({
-					resolved_campaign: resolved.candidates[0],
-					row_count: rows.length,
-					rows,
-				});
+				return await listAdGroupsHandler(args);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return textJson({ error: message });
+			}
+		},
+	);
+
+	server.tool(
+		"list_ad_groups_by_campaign",
+		{
+			account_name: z.string().optional(),
+			customer_id: z.string().optional(),
+			campaign_name: z.string().min(1),
+			match_mode: matchModeSchema,
+			date_range: dateRangeSchema.optional(),
+			include_metrics: z.boolean().default(false),
+			max_rows: z.number().int().positive().max(DEFAULT_SEARCH_MAX_ROWS).optional(),
+		},
+		async (args) => {
+			try {
+				return await listAdGroupsHandler(args);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return textJson({ error: message });
@@ -327,7 +467,7 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 				}
 				const during = dateRangeDuringClause(date_range);
 				const agFilter = adGroupId ? ` AND ad_group.id = ${adGroupId}` : "";
-				const query = `SELECT campaign.name, ad_group.name, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.ctr, metrics.conversions FROM keyword_view WHERE campaign.id = ${campaignId}${agFilter} AND ${during}`;
+				const query = Q.queryKeywordPerformance(campaignId, agFilter, during);
 				const rows = await searchStreamCollect(env, token, customerId, query, {});
 				return textJson({ customerId, campaignId, adGroupId: adGroupId ?? null, date_range, row_count: rows.length, rows });
 			} catch (error) {
@@ -362,7 +502,7 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
 				const campaignId = String(resolved.candidates[0].campaignId);
 				const during = dateRangeDuringClause(date_range);
-				const query = `SELECT search_term_view.search_term, campaign.name, ad_group.name, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.ctr FROM search_term_view WHERE campaign.id = ${campaignId} AND ${during}`;
+				const query = Q.querySearchTermsReport(campaignId, during);
 				const rows = await searchStreamCollect(env, token, customerId, query, {});
 				return textJson({
 					resolved_campaign: resolved.candidates[0],
@@ -378,12 +518,57 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 	);
 
 	server.tool(
+		"search",
+		{
+			customer_id: z
+				.string()
+				.min(1)
+				.describe("Customer ID only digits (no hyphens). Same contract as google-ads-mcp search."),
+			fields: z
+				.array(z.string())
+				.min(1)
+				.describe("GAQL field names, e.g. campaign.id, metrics.clicks. Must match API field reference."),
+			resource: z.string().min(1).describe("GAQL resource, e.g. campaign, ad_group."),
+			conditions: z
+				.array(z.string())
+				.optional()
+				.describe("WHERE fragments combined with AND (omit WHERE keyword)."),
+			orderings: z.array(z.string()).optional().describe("ORDER BY fragments (omit ORDER BY keyword)."),
+			limit: z
+				.union([z.number().int().positive(), z.string()])
+				.optional()
+				.describe("LIMIT value. change_event queries: use LIMIT <= 10000 per Google Ads guidance."),
+		},
+		async ({ customer_id, fields, resource, conditions, orderings, limit }) => {
+			try {
+				const token = await getGoogleAdsAccessToken(env);
+				const query = buildOfficialSearchGaql({
+					fields,
+					resource,
+					conditions: conditions ?? null,
+					orderings: orderings ?? null,
+					limit: limit ?? null,
+				});
+				const rows = await searchStreamCollect(env, token, normalizeCustomerId(customer_id), query, {
+					maxRows: DEFAULT_SEARCH_MAX_ROWS,
+				});
+				return textJson({ customer_id: normalizeCustomerId(customer_id), query, row_count: rows.length, rows });
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return textJson({ error: message });
+			}
+		},
+	);
+
+	server.tool(
 		"gaql_search",
 		{
 			query: z
 				.string()
 				.min(1)
-				.describe("Full GAQL SELECT … FROM … (read-only). Prefer name-based tools for normal chat."),
+				.describe(
+					"Full GAQL string (read-only). For google-ads-mcp-style building use the `search` tool (fields + resource + conditions). Prefer name-based tools for chat.",
+				),
 			account_name: z
 				.string()
 				.optional()
@@ -430,4 +615,6 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 			}
 		},
 	);
+
+	registerAgencyTools(server, env);
 }

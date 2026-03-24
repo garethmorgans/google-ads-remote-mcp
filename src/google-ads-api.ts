@@ -3,6 +3,8 @@ export const GOOGLE_ADS_API_VERSION = "v21";
 
 const DEFAULT_SEARCH_MAX_ROWS = 10_000;
 const RESOLVER_MAX_ROWS = 50;
+/** Cap for customer_client / MCC expansion queries (searchStream). */
+export const CUSTOMER_CLIENT_MAX_ROWS = 25_000;
 
 export type OAuthTokenResponse = {
 	access_token: string;

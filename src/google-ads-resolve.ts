@@ -1,6 +1,13 @@
 import {
+	type MergeAccountMap,
+	accessibleRowToAccountEntry,
+	mergeClientRowsIntoMap,
+} from "./google-ads-account-merge";
+import {
+	CUSTOMER_CLIENT_MAX_ROWS,
 	customerIdFromResourceName,
 	escapeGaqlString,
+	normalizeCustomerId,
 	RESOLVER_MAX_ROWS,
 	searchStreamCollect,
 } from "./google-ads-api";
@@ -222,7 +229,7 @@ export async function listAccountsWithNames(
 		const cid = customerIdFromResourceName(rn);
 		const query =
 			"SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager, customer.resource_name FROM customer";
-		const rows = await searchStreamCollect(env, accessToken, cid, query, { maxRows: 25 });
+		const rows = await searchStreamCollect(env, accessToken, cid, query, { maxRows: 1 });
 		const row = rows[0];
 		const c = rowCustomer(row);
 		if (c) {
@@ -251,9 +258,129 @@ export function dateRangeDuringClause(range: string): string {
 		"LAST_MONTH",
 		"THIS_QUARTER",
 		"LAST_QUARTER",
+		"PREVIOUS_7_DAYS",
+		"PREVIOUS_14_DAYS",
+		"PREVIOUS_30_DAYS",
 	]);
 	if (!allowed.has(range)) {
 		throw new Error(`Invalid date_range: ${range}. Use a preset like LAST_30_DAYS.`);
 	}
 	return `segments.date DURING ${range}`;
+}
+
+export type ListCustomerClientsOptions = {
+	onlyLeafAccounts?: boolean;
+	maxRows?: number;
+};
+
+/**
+ * Lists accounts linked under an MCC (manager customer_id in URL).
+ * Complements listAccessibleCustomers, which often returns fewer "direct" roots.
+ */
+export async function fetchCustomerClients(
+	env: Env,
+	accessToken: string,
+	managerCustomerId: string,
+	options: ListCustomerClientsOptions = {},
+): Promise<unknown[]> {
+	const cap = Math.min(
+		options.maxRows ?? CUSTOMER_CLIENT_MAX_ROWS,
+		CUSTOMER_CLIENT_MAX_ROWS,
+	);
+	const fields =
+		"customer_client.client_customer, customer_client.level, customer_client.manager, customer_client.descriptive_name, customer_client.currency_code, customer_client.time_zone, customer_client.id, customer_client.status, customer_client.resource_name";
+	let query = `SELECT ${fields} FROM customer_client`;
+	if (options.onlyLeafAccounts) {
+		query += " WHERE customer_client.manager = FALSE";
+	}
+	return searchStreamCollect(env, accessToken, normalizeCustomerId(managerCustomerId), query, {
+		maxRows: cap,
+	});
+}
+
+export type ListAccountsMergedOptions = {
+	includeCustomerClients: boolean;
+	onlyLeafAccounts: boolean;
+	managerCustomerId?: string;
+	maxClientRows?: number;
+};
+
+export async function listAccountsWithNamesMerged(
+	env: Env,
+	accessToken: string,
+	accessibleResourceNames: string[],
+	options: ListAccountsMergedOptions,
+): Promise<{
+	accounts: Array<Record<string, unknown>>;
+	errors: Array<{ customerId?: string; phase: string; message: string }>;
+	sources: { accessible_roots: number; customer_client_rows: number; merged_total: number };
+}> {
+	const errors: Array<{ customerId?: string; phase: string; message: string }> = [];
+	const map: MergeAccountMap = new Map();
+
+	for (const rn of accessibleResourceNames) {
+		let cid: string;
+		try {
+			cid = customerIdFromResourceName(rn);
+		} catch (e) {
+			errors.push({
+				phase: "parse_resource_name",
+				message: e instanceof Error ? e.message : String(e),
+			});
+			continue;
+		}
+		try {
+			const query =
+				"SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager, customer.resource_name FROM customer";
+			const rows = await searchStreamCollect(env, accessToken, cid, query, { maxRows: 1 });
+			const parsed = accessibleRowToAccountEntry(cid, rows[0] ?? null);
+			if (parsed) map.set(parsed.customerId, parsed.entry);
+		} catch (e) {
+			errors.push({
+				customerId: cid,
+				phase: "accessible_customer_row",
+				message: e instanceof Error ? e.message : String(e),
+			});
+			map.set(cid, {
+				customerId: cid,
+				descriptiveName: null,
+				source: "accessible",
+				note: "query_failed_see_errors",
+			});
+		}
+	}
+
+	let customer_client_rows = 0;
+	if (options.includeCustomerClients) {
+		const managerId = options.managerCustomerId
+			? normalizeCustomerId(options.managerCustomerId)
+			: normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+		try {
+			const clientRows = await fetchCustomerClients(env, accessToken, managerId, {
+				onlyLeafAccounts: options.onlyLeafAccounts,
+				maxRows: options.maxClientRows,
+			});
+			customer_client_rows = clientRows.length;
+			mergeClientRowsIntoMap(map, clientRows);
+		} catch (e) {
+			errors.push({
+				customerId: managerId,
+				phase: "customer_client",
+				message: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	const accounts = [...map.values()].sort((a, b) =>
+		String(a.customerId ?? "").localeCompare(String(b.customerId ?? "")),
+	);
+	return {
+		accounts,
+		errors,
+		sources: {
+			accessible_roots: accessibleResourceNames.length,
+			customer_client_rows,
+			merged_total: accounts.length,
+		},
+	};
 }
