@@ -7,6 +7,7 @@ import {
 	resolveAdsLoginCustomerId,
 	searchStreamCollect,
 } from "./google-ads-api";
+import { fetchCustomerClients } from "./google-ads-resolve";
 
 describe("escapeGaqlString", () => {
 	it("escapes single quotes and backslashes", () => {
@@ -103,6 +104,44 @@ describe("searchStreamCollect", () => {
 		await searchStreamCollect(env, "tok", "123", "SELECT 1", {
 			maxRows: 5,
 			loginCustomerId: "888-111-2222",
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("fetchCustomerClients", () => {
+	const env = {
+		GOOGLE_ADS_DEVELOPER_TOKEN: "dev",
+		GOOGLE_ADS_LOGIN_CUSTOMER_ID: "9990000000",
+	} as Env;
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("defaults login-customer-id to managerCustomerId when loginCustomerId is absent", async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo, init?: RequestInit) => {
+			const headers = init?.headers as Record<string, string>;
+			expect(headers["login-customer-id"]).toBe("1234567890");
+			return new Response("{}", { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		await fetchCustomerClients(env, "tok", "123-456-7890", { maxRows: 1 });
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("uses explicit loginCustomerId when provided", async () => {
+		const fetchMock = vi.fn(async (_input: RequestInfo, init?: RequestInit) => {
+			const headers = init?.headers as Record<string, string>;
+			expect(headers["login-customer-id"]).toBe("7778889999");
+			return new Response("{}", { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		await fetchCustomerClients(env, "tok", "1234567890", {
+			maxRows: 1,
+			loginCustomerId: "777-888-9999",
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});

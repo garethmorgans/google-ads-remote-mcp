@@ -324,10 +324,12 @@ export async function fetchCustomerClients(
 	if (options.onlyLeafAccounts) {
 		query += " WHERE customer_client.manager = FALSE";
 	}
-	const streamLogin =
-		options.loginCustomerId != null && options.loginCustomerId !== ""
-			? { loginCustomerId: normalizeCustomerId(options.loginCustomerId) }
-			: {};
+	// For `customer_client` we want the authorized context to match the operating manager
+	// (the `customers/{managerCustomerId}` URL customer). If the caller doesn't override,
+	// default to `managerCustomerId` so `login-customer-id` always stays consistent.
+	const streamLogin = options.loginCustomerId?.replace(/\D/g, "")
+		? { loginCustomerId: normalizeCustomerId(options.loginCustomerId) }
+		: { loginCustomerId: normalizeCustomerId(managerCustomerId) };
 	return searchStreamCollect(env, accessToken, normalizeCustomerId(managerCustomerId), query, {
 		maxRows: cap,
 		...streamLogin,

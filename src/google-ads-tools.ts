@@ -181,15 +181,20 @@ export function registerGoogleAdsTools(server: McpServer, env: Env) {
 				if (!managerId) {
 					managerId = normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
 				}
+				const loginCustomerIdUsed = login_customer_id?.replace(/\D/g, "")
+					? normalizeCustomerId(login_customer_id)
+					: managerId;
 				const rows = await fetchCustomerClients(env, token, managerId, {
 					onlyLeafAccounts: only_leaf_accounts,
 					maxRows: max_rows,
 					loginCustomerId: login_customer_id,
 				});
 				return textJson({
+					operating_customer_id: managerId,
 					manager_customer_id: managerId,
 					row_count: rows.length,
 					only_leaf_accounts,
+					login_customer_id_used: loginCustomerIdUsed,
 					rows,
 				});
 			} catch (error) {
