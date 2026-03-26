@@ -80,6 +80,21 @@ describe("searchStreamCollect", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("parses documented searchStream JSON array envelope", async () => {
+		const fetchMock = vi.fn(async () =>
+			new Response(
+				'[{"results":[{"campaign":{"id":"1"}}]},{"results":[{"campaign":{"id":"2"}}]}]',
+				{ status: 200 },
+			),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const rows = await searchStreamCollect(env, "tok", "123", "SELECT campaign.id FROM campaign", {
+			maxRows: 10,
+		});
+		expect(rows).toHaveLength(2);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("stops at maxRows", async () => {
 		const fetchMock = vi.fn(async () =>
 			new Response(

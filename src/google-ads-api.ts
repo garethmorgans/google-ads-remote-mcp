@@ -216,13 +216,7 @@ export async function searchStreamCollect(
 				const trimmed = line.trim();
 				if (!trimmed) continue;
 				try {
-					const msg = JSON.parse(trimmed) as { results?: unknown[] };
-					if (Array.isArray(msg.results)) {
-						for (const r of msg.results) {
-							rows.push(r);
-							if (rows.length >= maxRows) return rows;
-						}
-					}
+					if (appendSearchStreamRows(JSON.parse(trimmed), rows, maxRows)) return rows;
 				} catch {
 					// ignore partial line
 				}
@@ -230,13 +224,7 @@ export async function searchStreamCollect(
 		}
 		if (buffer.trim()) {
 			try {
-				const msg = JSON.parse(buffer.trim()) as { results?: unknown[] };
-				if (Array.isArray(msg.results)) {
-					for (const r of msg.results) {
-						rows.push(r);
-						if (rows.length >= maxRows) return rows;
-					}
-				}
+				if (appendSearchStreamRows(JSON.parse(buffer.trim()), rows, maxRows)) return rows;
 			} catch {
 				// ignore
 			}
@@ -252,31 +240,37 @@ function parseSearchStreamText(text: string, rows: unknown[], maxRows: number): 
 	const trimmed = text.trim();
 	if (!trimmed) return rows;
 	try {
-		const msg = JSON.parse(trimmed) as { results?: unknown[] };
-		if (Array.isArray(msg.results)) {
-			for (const r of msg.results) {
-				rows.push(r);
-				if (rows.length >= maxRows) break;
-			}
-		}
+		appendSearchStreamRows(JSON.parse(trimmed), rows, maxRows);
 	} catch {
 		for (const line of trimmed.split("\n")) {
 			const t = line.trim();
 			if (!t) continue;
 			try {
-				const msg = JSON.parse(t) as { results?: unknown[] };
-				if (Array.isArray(msg.results)) {
-					for (const r of msg.results) {
-						rows.push(r);
-						if (rows.length >= maxRows) return rows;
-					}
-				}
+				if (appendSearchStreamRows(JSON.parse(t), rows, maxRows)) return rows;
 			} catch {
 				// skip
 			}
 		}
 	}
 	return rows;
+}
+
+function appendSearchStreamRows(parsed: unknown, rows: unknown[], maxRows: number): boolean {
+	// REST searchStream wraps chunks in a JSON array, e.g. [{ results: [...] }, ...].
+	if (Array.isArray(parsed)) {
+		for (const item of parsed) {
+			if (appendSearchStreamRows(item, rows, maxRows)) return true;
+		}
+		return rows.length >= maxRows;
+	}
+	if (!parsed || typeof parsed !== "object") return rows.length >= maxRows;
+	const envelope = parsed as { results?: unknown[] };
+	if (!Array.isArray(envelope.results)) return rows.length >= maxRows;
+	for (const r of envelope.results) {
+		rows.push(r);
+		if (rows.length >= maxRows) return true;
+	}
+	return false;
 }
 
 export { DEFAULT_SEARCH_MAX_ROWS, RESOLVER_MAX_ROWS };
