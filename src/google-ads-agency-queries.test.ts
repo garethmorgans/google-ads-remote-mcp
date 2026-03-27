@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildOfficialSearchGaql } from "./google-ads-official-search";
-import { dateBetweenClause, duringOrBetween, queryCampaignPerformanceById, queryLowQualityKeywords } from "./google-ads-agency-queries";
+import {
+	dateBetweenClause,
+	duringOrBetween,
+	queryCampaignPerformanceById,
+	queryLowQualityKeywords,
+} from "./google-ads-agency-queries";
 import { dateRangeDuringClause } from "./google-ads-resolve";
 
 describe("duringOrBetween", () => {
@@ -11,7 +16,9 @@ describe("duringOrBetween", () => {
 	});
 
 	it("uses date_range preset", () => {
-		expect(duringOrBetween("LAST_7_DAYS", undefined, undefined)).toBe("segments.date DURING LAST_7_DAYS");
+		expect(duringOrBetween("LAST_7_DAYS", undefined, undefined)).toBe(
+			"segments.date DURING LAST_7_DAYS",
+		);
 	});
 
 	it("rejects invalid date format", () => {
@@ -50,6 +57,8 @@ describe("parity with official PARAMETERS", () => {
 
 describe("dateRangeDuringClause PREVIOUS", () => {
 	it("allows PREVIOUS_7_DAYS", () => {
-		expect(dateRangeDuringClause("PREVIOUS_7_DAYS")).toBe("segments.date DURING PREVIOUS_7_DAYS");
+		expect(dateRangeDuringClause("PREVIOUS_7_DAYS")).toBe(
+			"segments.date DURING PREVIOUS_7_DAYS",
+		);
 	});
 });

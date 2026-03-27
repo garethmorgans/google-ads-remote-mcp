@@ -11,7 +11,10 @@ export class MyMCP extends McpAgent {
 	});
 
 	async init() {
-		registerGoogleAdsTools(this.server, this.env as Env);
+		registerGoogleAdsTools(this.server, this.env as Env, () => {
+			const p = this.props as { userId?: string } | undefined;
+			return p?.userId;
+		});
 	}
 }
 

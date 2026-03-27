@@ -4,8 +4,24 @@ import { aggregateCustomerDaily, weightedAvgQualityScore } from "./google-ads-ag
 describe("aggregateCustomerDaily", () => {
 	it("sums micros and computes roas", () => {
 		const rows = [
-			{ metrics: { impressions: 100, clicks: 10, costMicros: 5_000_000, conversions: 2, conversionsValue: 80 } },
-			{ metrics: { impressions: 100, clicks: 10, costMicros: 5_000_000, conversions: 1, conversionsValue: 40 } },
+			{
+				metrics: {
+					impressions: 100,
+					clicks: 10,
+					costMicros: 5_000_000,
+					conversions: 2,
+					conversionsValue: 80,
+				},
+			},
+			{
+				metrics: {
+					impressions: 100,
+					clicks: 10,
+					costMicros: 5_000_000,
+					conversions: 1,
+					conversionsValue: 40,
+				},
+			},
 		];
 		const s = aggregateCustomerDaily(rows);
 		expect(s.impressions).toBe(200);

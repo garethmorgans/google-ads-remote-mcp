@@ -6,11 +6,12 @@ import * as Q from "./google-ads-agency-queries";
 import {
 	CUSTOMER_CLIENT_MAX_ROWS,
 	DEFAULT_SEARCH_MAX_ROWS,
-	getGoogleAdsAccessToken,
+	getGoogleAdsAccessTokenFromContext,
 	listAccessibleCustomers,
 	listAccessibleLoginOptions,
 	mergeSearchStreamOptions,
 	normalizeCustomerId,
+	resolveAdsLoginCustomerId,
 	searchStreamCollect,
 } from "./google-ads-api";
 import {
@@ -107,13 +108,20 @@ const accountCustomerArgs = {
 	customer_id: z.string().optional().describe("Numeric customer ID."),
 	match_mode: matchModeSchema,
 	date_range: dateRangeSchema,
-	date_start: z.string().optional().describe("YYYY-MM-DD; use with date_end instead of date_range."),
+	date_start: z
+		.string()
+		.optional()
+		.describe("YYYY-MM-DD; use with date_end instead of date_range."),
 	date_end: z.string().optional(),
 	max_rows: maxRowsSchema(DEFAULT_SEARCH_MAX_ROWS, LIST_CAP),
 	login_customer_id: loginCustomerIdSchema,
 };
 
-export function registerAgencyTools(server: McpServer, env: Env) {
+export function registerAgencyTools(
+	server: McpServer,
+	env: Env,
+	resolveUserId?: () => string | undefined,
+) {
 	server.tool(
 		"list_campaigns",
 		{
@@ -121,13 +129,34 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			channel_filter: z
 				.string()
 				.optional()
-				.describe("Optional GAQL fragment, e.g. campaign.advertising_channel_type = SEARCH"),
+				.describe(
+					"Optional GAQL fragment, e.g. campaign.advertising_channel_type = SEARCH",
+				),
 		},
-		async ({ account_name, customer_id, match_mode, max_rows, channel_filter, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			max_rows,
+			channel_filter,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const cap = max_rows ?? LIST_CAP;
 				const query = Q.queryListCampaigns(channel_filter);
@@ -150,11 +179,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAccountSummary(during);
@@ -163,10 +213,18 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					token,
 					r.customerId,
 					query,
-					mergeSearchStreamOptions({ maxRows: max_rows ?? DEFAULT_SEARCH_MAX_ROWS }, login_customer_id),
+					mergeSearchStreamOptions(
+						{ maxRows: max_rows ?? DEFAULT_SEARCH_MAX_ROWS },
+						login_customer_id,
+					),
 				);
 				const summary = aggregateCustomerDaily(rows);
-				return textJson({ customer_id: r.customerId, date_filter: during, summary, daily_row_count: rows.length });
+				return textJson({
+					customer_id: r.customerId,
+					date_filter: during,
+					summary,
+					daily_row_count: rows.length,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -178,11 +236,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAccountBudgetPacing(during);
@@ -237,9 +316,21 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryCampaignOverview(during, order_by);
@@ -282,11 +373,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryCampaignBiddingBudget(during);
@@ -309,11 +421,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const qCamp = Q.queryCampaignQualityAggregates(during);
@@ -377,8 +510,12 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
 				const resolved = await resolveAdGroupByName(env, token, {
 					customerId: customer_id ? normalizeCustomerId(customer_id) : undefined,
 					accountName: account_name,
@@ -390,7 +527,9 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 				});
 				const block = blockUnlessResolved(resolved, "ad_group");
 				if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
-				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
+				const customerId = String(
+					resolved.resolved_customer_id ?? resolved.candidates[0].customerId,
+				);
 				const adGroupId = String(resolved.candidates[0].adGroupId);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAdGroupPerformance(adGroupId, during);
@@ -399,7 +538,10 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					token,
 					customerId,
 					query,
-					mergeSearchStreamOptions({ maxRows: max_rows ?? DEFAULT_SEARCH_MAX_ROWS }, login_customer_id),
+					mergeSearchStreamOptions(
+						{ maxRows: max_rows ?? DEFAULT_SEARCH_MAX_ROWS },
+						login_customer_id,
+					),
 				);
 				return textJson({
 					resolved_ad_group: resolved.candidates[0],
@@ -439,9 +581,21 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryKeywordsByAccount(
@@ -456,7 +610,10 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					token,
 					r.customerId,
 					query,
-					mergeSearchStreamOptions({ maxRows: max_rows ?? KEYWORD_CAP }, login_customer_id),
+					mergeSearchStreamOptions(
+						{ maxRows: max_rows ?? KEYWORD_CAP },
+						login_customer_id,
+					),
 				);
 				return textJson({ customer_id: r.customerId, row_count: rows.length, rows });
 			} catch (e) {
@@ -472,15 +629,41 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			customer_id: z.string().optional(),
 			match_mode: matchModeSchema,
 			date_range: dateRangeSchema,
-			threshold: z.number().int().min(1).max(10).default(5).describe("QS strictly below this (default 5)."),
+			threshold: z
+				.number()
+				.int()
+				.min(1)
+				.max(10)
+				.default(5)
+				.describe("QS strictly below this (default 5)."),
 			max_rows: maxRowsSchema(LIST_CAP, 500),
 			login_customer_id: loginCustomerIdSchema,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, threshold, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			threshold,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = dateRangeDuringClause(date_range);
 				const query = Q.queryLowQualityKeywords(threshold, during);
@@ -491,7 +674,12 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					query,
 					mergeSearchStreamOptions({ maxRows: max_rows ?? 500 }, login_customer_id),
 				);
-				return textJson({ customer_id: r.customerId, threshold, row_count: rows.length, rows });
+				return textJson({
+					customer_id: r.customerId,
+					threshold,
+					row_count: rows.length,
+					rows,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -523,8 +711,12 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
 				const resolved = await resolveCampaignByName(env, token, {
 					customerId: customer_id ? normalizeCustomerId(customer_id) : undefined,
 					accountName: account_name,
@@ -535,7 +727,9 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 				});
 				const block = blockUnlessResolved(resolved, "campaign");
 				if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
-				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
+				const customerId = String(
+					resolved.resolved_customer_id ?? resolved.candidates[0].customerId,
+				);
 				const campaignId = String(resolved.candidates[0].campaignId);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.querySearchTermsReport(campaignId, during);
@@ -546,7 +740,11 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					query,
 					mergeSearchStreamOptions({ maxRows: max_rows ?? 2000 }, login_customer_id),
 				);
-				return textJson({ resolved_campaign: resolved.candidates[0], row_count: rows.length, rows });
+				return textJson({
+					resolved_campaign: resolved.candidates[0],
+					row_count: rows.length,
+					rows,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -578,8 +776,12 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
 				const resolved = await resolveCampaignByName(env, token, {
 					customerId: customer_id ? normalizeCustomerId(customer_id) : undefined,
 					accountName: account_name,
@@ -590,7 +792,9 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 				});
 				const block = blockUnlessResolved(resolved, "campaign");
 				if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
-				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
+				const customerId = String(
+					resolved.resolved_customer_id ?? resolved.candidates[0].customerId,
+				);
 				const campaignId = String(resolved.candidates[0].campaignId);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAdPerformanceByCampaign(campaignId, during);
@@ -601,7 +805,11 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					query,
 					mergeSearchStreamOptions({ maxRows: max_rows ?? 500 }, login_customer_id),
 				);
-				return textJson({ resolved_campaign: resolved.candidates[0], row_count: rows.length, rows });
+				return textJson({
+					resolved_campaign: resolved.candidates[0],
+					row_count: rows.length,
+					rows,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -633,8 +841,12 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
 				const resolved = await resolveCampaignByName(env, token, {
 					customerId: customer_id ? normalizeCustomerId(customer_id) : undefined,
 					accountName: account_name,
@@ -645,7 +857,9 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 				});
 				const block = blockUnlessResolved(resolved, "campaign");
 				if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
-				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
+				const customerId = String(
+					resolved.resolved_customer_id ?? resolved.candidates[0].customerId,
+				);
 				const campaignId = String(resolved.candidates[0].campaignId);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAssetPerformance(campaignId, during);
@@ -656,7 +870,11 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					query,
 					mergeSearchStreamOptions({ maxRows: max_rows ?? 500 }, login_customer_id),
 				);
-				return textJson({ resolved_campaign: resolved.candidates[0], row_count: rows.length, rows });
+				return textJson({
+					resolved_campaign: resolved.candidates[0],
+					row_count: rows.length,
+					rows,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -684,8 +902,12 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
 				let customerId: string;
 				let campaignId: string;
 				let adGroupId: string | undefined;
@@ -715,7 +937,9 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					});
 					const block = blockUnlessResolved(resolved, "campaign");
 					if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
-					customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
+					customerId = String(
+						resolved.resolved_customer_id ?? resolved.candidates[0].customerId,
+					);
 					campaignId = String(resolved.candidates[0].campaignId);
 				}
 				const query = Q.queryResponsiveSearchAdDetails(campaignId, adGroupId);
@@ -738,11 +962,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAdStrengthReport(during);
@@ -765,11 +1010,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAudiencePerformance(during);
@@ -805,9 +1071,21 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const cap = max_rows ?? LIST_CAP;
@@ -851,11 +1129,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryDevicePerformance(during);
@@ -878,11 +1177,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryGeographicUserLocation(during);
@@ -905,11 +1225,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryShoppingProductPerformance(during);
@@ -932,11 +1273,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryPmaxAssetGroupPerformance(during);
@@ -959,11 +1321,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryPmaxSearchTerms(during);
@@ -992,9 +1375,21 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		},
 		async ({ account_name, customer_id, match_mode, max_rows, login_customer_id }) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const query = Q.queryListConversionActions();
 				const rows = await searchStreamCollect(
@@ -1016,11 +1411,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryConversionPerformanceByCampaign(during);
@@ -1043,11 +1459,32 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		{
 			...accountCustomerArgs,
 		},
-		async ({ account_name, customer_id, match_mode, date_range, date_start, date_end, max_rows, login_customer_id }) => {
+		async ({
+			account_name,
+			customer_id,
+			match_mode,
+			date_range,
+			date_start,
+			date_end,
+			max_rows,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAttributionSummary(during);
@@ -1056,7 +1493,10 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					token,
 					r.customerId,
 					query,
-					mergeSearchStreamOptions({ maxRows: max_rows ?? DEFAULT_SEARCH_MAX_ROWS }, login_customer_id),
+					mergeSearchStreamOptions(
+						{ maxRows: max_rows ?? DEFAULT_SEARCH_MAX_ROWS },
+						login_customer_id,
+					),
 				);
 				return textJson({
 					customer_id: r.customerId,
@@ -1096,8 +1536,12 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
 				const resolved = await resolveCampaignByName(env, token, {
 					customerId: customer_id ? normalizeCustomerId(customer_id) : undefined,
 					accountName: account_name,
@@ -1108,7 +1552,9 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 				});
 				const block = blockUnlessResolved(resolved, "campaign");
 				if (block) return textJson({ ...block, report: "not_run_needs_resolution" });
-				const customerId = String(resolved.resolved_customer_id ?? resolved.candidates[0].customerId);
+				const customerId = String(
+					resolved.resolved_customer_id ?? resolved.candidates[0].customerId,
+				);
 				const campaignId = String(resolved.candidates[0].campaignId);
 				const during = Q.duringOrBetween(date_range, date_start, date_end);
 				const query = Q.queryAuctionInsights(campaignId, during);
@@ -1119,7 +1565,11 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 					query,
 					mergeSearchStreamOptions({ maxRows: max_rows ?? 100 }, login_customer_id),
 				);
-				return textJson({ resolved_campaign: resolved.candidates[0], row_count: rows.length, rows });
+				return textJson({
+					resolved_campaign: resolved.candidates[0],
+					row_count: rows.length,
+					rows,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -1138,9 +1588,21 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		},
 		async ({ account_name, customer_id, match_mode, date_range, limit, login_customer_id }) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
-				const rns = await listAccessibleCustomers(env, token, listAccessibleLoginOptions(login_customer_id));
-				const r = await resolveSingleCustomer(env, token, rns, account_name, customer_id, match_mode, login_customer_id);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
+				const rns = await listAccessibleCustomers(
+					env,
+					token,
+					listAccessibleLoginOptions(login_customer_id),
+				);
+				const r = await resolveSingleCustomer(
+					env,
+					token,
+					rns,
+					account_name,
+					customer_id,
+					match_mode,
+					login_customer_id,
+				);
 				if ("error" in r) return textJson(r.error);
 				const query = Q.queryChangeHistoryDuring(date_range, limit);
 				const rows = await searchStreamCollect(
@@ -1160,18 +1622,27 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 	server.tool(
 		"get_mcc_performance_overview",
 		{
-			manager_customer_id: z.string().optional().describe("Defaults to GOOGLE_ADS_LOGIN_CUSTOMER_ID."),
+			manager_customer_id: z
+				.string()
+				.optional()
+				.describe("Defaults to GOOGLE_ADS_LOGIN_CUSTOMER_ID."),
 			date_range: dateRangeSchema,
 			only_leaf_accounts: z.boolean().default(true),
 			max_accounts: z.number().int().min(1).max(MCC_MAX_ACCOUNTS_DEFAULT).default(25),
 			login_customer_id: loginCustomerIdSchema,
 		},
-		async ({ manager_customer_id, date_range, only_leaf_accounts, max_accounts, login_customer_id }) => {
+		async ({
+			manager_customer_id,
+			date_range,
+			only_leaf_accounts,
+			max_accounts,
+			login_customer_id,
+		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
 				const mid = manager_customer_id
 					? normalizeCustomerId(manager_customer_id)
-					: normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+					: resolveAdsLoginCustomerId(env);
 				const ids = await mccLeafCustomerIds(
 					env,
 					token,
@@ -1205,7 +1676,11 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 						});
 					}
 				}
-				return textJson({ manager_customer_id: mid, account_count: results.length, results });
+				return textJson({
+					manager_customer_id: mid,
+					account_count: results.length,
+					results,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -1222,10 +1697,10 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 		},
 		async ({ manager_customer_id, only_leaf_accounts, max_accounts, login_customer_id }) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
 				const mid = manager_customer_id
 					? normalizeCustomerId(manager_customer_id)
-					: normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+					: resolveAdsLoginCustomerId(env);
 				const ids = await mccLeafCustomerIds(
 					env,
 					token,
@@ -1268,7 +1743,11 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 						});
 					}
 				}
-				return textJson({ manager_customer_id: mid, account_count: results.length, results });
+				return textJson({
+					manager_customer_id: mid,
+					account_count: results.length,
+					results,
+				});
 			} catch (e) {
 				return textJson({ error: e instanceof Error ? e.message : String(e) });
 			}
@@ -1296,10 +1775,10 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 			login_customer_id,
 		}) => {
 			try {
-				const token = await getGoogleAdsAccessToken(env);
+				const token = await getGoogleAdsAccessTokenFromContext(env, resolveUserId);
 				const mid = manager_customer_id
 					? normalizeCustomerId(manager_customer_id)
-					: normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+					: resolveAdsLoginCustomerId(env);
 				const ids = await mccLeafCustomerIds(
 					env,
 					token,
@@ -1339,7 +1818,9 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 						const a = aggregateCustomerDaily(rowsC);
 						const b = aggregateCustomerDaily(rowsP);
 						const convDrop =
-							b.conversions > 5 && a.conversions < b.conversions * 0.5 ? "conversions_down_50pct" : null;
+							b.conversions > 5 && a.conversions < b.conversions * 0.5
+								? "conversions_down_50pct"
+								: null;
 						let spendSpikeFlag: string | null = null;
 						if (b.cost_micros > 1_000_000 && a.cost_micros > b.cost_micros * 1.5)
 							spendSpikeFlag = "spend_up_50pct";
@@ -1360,7 +1841,10 @@ export function registerAgencyTools(server: McpServer, env: Env) {
 							});
 						}
 					} catch (err) {
-						alerts.push({ customer_id: cid, error: err instanceof Error ? err.message : String(err) });
+						alerts.push({
+							customer_id: cid,
+							error: err instanceof Error ? err.message : String(err),
+						});
 					}
 				}
 				return textJson({

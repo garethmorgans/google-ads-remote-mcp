@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	DEFAULT_ADS_LOGIN_CUSTOMER_ID,
 	escapeGaqlString,
 	GOOGLE_ADS_API_VERSION,
 	listAccessibleCustomers,
@@ -37,9 +38,10 @@ describe("resolveAdsLoginCustomerId", () => {
 		expect(resolveAdsLoginCustomerId(env, "")).toBe("999888");
 	});
 
-	it("throws when env has no digits", () => {
-		expect(() => resolveAdsLoginCustomerId({ GOOGLE_ADS_LOGIN_CUSTOMER_ID: "" } as Env)).toThrow(
-			/GOOGLE_ADS_LOGIN_CUSTOMER_ID/,
+	it("uses default MCC when env login id is unset or empty", () => {
+		expect(resolveAdsLoginCustomerId({} as Env)).toBe(DEFAULT_ADS_LOGIN_CUSTOMER_ID);
+		expect(resolveAdsLoginCustomerId({ GOOGLE_ADS_LOGIN_CUSTOMER_ID: "" } as Env)).toBe(
+			DEFAULT_ADS_LOGIN_CUSTOMER_ID,
 		);
 	});
 });
@@ -65,7 +67,9 @@ describe("searchStreamCollect", () => {
 			expect(headers["developer-token"]).toBe("dev");
 			expect(headers["login-customer-id"]).toBe("999");
 			expect(headers["authorization"]).toBe("Bearer tok");
-			expect(JSON.parse(init?.body as string)).toEqual({ query: "SELECT campaign.id FROM campaign" });
+			expect(JSON.parse(init?.body as string)).toEqual({
+				query: "SELECT campaign.id FROM campaign",
+			});
 			return new Response(
 				'{"results":[{"campaign":{"id":"1"}}]}\n{"results":[{"campaign":{"id":"2"}}]}\n',
 				{ status: 200 },
@@ -73,39 +77,59 @@ describe("searchStreamCollect", () => {
 		});
 		vi.stubGlobal("fetch", fetchMock);
 
-		const rows = await searchStreamCollect(env, "tok", "123", "SELECT campaign.id FROM campaign", {
-			maxRows: 10,
-		});
+		const rows = await searchStreamCollect(
+			env,
+			"tok",
+			"123",
+			"SELECT campaign.id FROM campaign",
+			{
+				maxRows: 10,
+			},
+		);
 		expect(rows).toHaveLength(2);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("parses documented searchStream JSON array envelope", async () => {
-		const fetchMock = vi.fn(async () =>
-			new Response(
-				'[{"results":[{"campaign":{"id":"1"}}]},{"results":[{"campaign":{"id":"2"}}]}]',
-				{ status: 200 },
-			),
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					'[{"results":[{"campaign":{"id":"1"}}]},{"results":[{"campaign":{"id":"2"}}]}]',
+					{ status: 200 },
+				),
 		);
 		vi.stubGlobal("fetch", fetchMock);
-		const rows = await searchStreamCollect(env, "tok", "123", "SELECT campaign.id FROM campaign", {
-			maxRows: 10,
-		});
+		const rows = await searchStreamCollect(
+			env,
+			"tok",
+			"123",
+			"SELECT campaign.id FROM campaign",
+			{
+				maxRows: 10,
+			},
+		);
 		expect(rows).toHaveLength(2);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("stops at maxRows", async () => {
-		const fetchMock = vi.fn(async () =>
-			new Response(
-				'{"results":[{"campaign":{"id":"1"}},{"campaign":{"id":"2"}},{"campaign":{"id":"3"}}]}\n',
-				{ status: 200 },
-			),
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					'{"results":[{"campaign":{"id":"1"}},{"campaign":{"id":"2"}},{"campaign":{"id":"3"}}]}\n',
+					{ status: 200 },
+				),
 		);
 		vi.stubGlobal("fetch", fetchMock);
-		const rows = await searchStreamCollect(env, "tok", "123", "SELECT campaign.id FROM campaign", {
-			maxRows: 2,
-		});
+		const rows = await searchStreamCollect(
+			env,
+			"tok",
+			"123",
+			"SELECT campaign.id FROM campaign",
+			{
+				maxRows: 2,
+			},
+		);
 		expect(rows).toHaveLength(2);
 	});
 
@@ -178,7 +202,9 @@ describe("listAccessibleCustomers", () => {
 			expect(url).toContain(":listAccessibleCustomers");
 			const headers = init?.headers as Record<string, string>;
 			expect(headers["login-customer-id"]).toBe("999");
-			return new Response(JSON.stringify({ resourceNames: ["customers/1"] }), { status: 200 });
+			return new Response(JSON.stringify({ resourceNames: ["customers/1"] }), {
+				status: 200,
+			});
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const r = await listAccessibleCustomers(env, "tok");

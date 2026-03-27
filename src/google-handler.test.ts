@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { GOOGLE_TOKEN_PREFIX } from "./auth";
+import { GOOGLE_MCP_UPSTREAM_SCOPES } from "./oauth-utils";
 import { GoogleHandler } from "./google-handler";
 
 type StoredState = {
@@ -20,6 +22,10 @@ class InMemoryKv {
 	async delete(key: string): Promise<void> {
 		this.store.delete(key);
 	}
+
+	getStored(key: string): string | undefined {
+		return this.store.get(key);
+	}
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -34,19 +40,17 @@ async function seedState(kv: InMemoryKv, state: string, oauthReq: StoredState): 
 }
 
 function buildEnv(
-	kv: InMemoryKv,
+	oauthKv: InMemoryKv,
+	googleAuthKv: InMemoryKv,
 	completeAuthorization?: () => Promise<{ redirectTo: string }>,
 ): Env & { OAUTH_PROVIDER: { completeAuthorization: NonNullable<unknown> } } {
 	return {
-		OAUTH_KV: kv as unknown as KVNamespace,
+		OAUTH_KV: oauthKv as unknown as KVNamespace,
+		GOOGLE_AUTH_KV: googleAuthKv as unknown as KVNamespace,
 		MCP_OBJECT: {} as DurableObjectNamespace<import("./index").MyMCP>,
 		GOOGLE_CLIENT_ID: "google-client-id",
 		GOOGLE_CLIENT_SECRET: "google-client-secret",
 		GOOGLE_ADS_DEVELOPER_TOKEN: "dev-token",
-		GOOGLE_ADS_LOGIN_CUSTOMER_ID: "123",
-		GOOGLE_ADS_OAUTH_CLIENT_ID: "ads-client",
-		GOOGLE_ADS_OAUTH_CLIENT_SECRET: "ads-secret",
-		GOOGLE_ADS_OAUTH_REFRESH_TOKEN: "refresh",
 		OAUTH_PROVIDER: {
 			completeAuthorization:
 				completeAuthorization ??
@@ -57,21 +61,67 @@ function buildEnv(
 	} as Env & { OAUTH_PROVIDER: { completeAuthorization: NonNullable<unknown> } };
 }
 
+describe("GoogleHandler /authorize", () => {
+	it("redirects to Google with adwords scope and offline access", async () => {
+		const oauthKv = new InMemoryKv();
+		const googleAuthKv = new InMemoryKv();
+		const env = buildEnv(oauthKv, googleAuthKv);
+
+		const parseAuthRequest = vi.fn(async () => ({ clientId: "abc", scope: "mcp" }));
+		const envWithParse = {
+			...env,
+			OAUTH_PROVIDER: {
+				...env.OAUTH_PROVIDER,
+				parseAuthRequest,
+			},
+		};
+
+		const request = new Request("https://mcp.example/authorize");
+		const response = await GoogleHandler.fetch(request, envWithParse as typeof env);
+
+		expect(response.status).toBe(302);
+		const location = response.headers.get("Location");
+		expect(location).toBeTruthy();
+		const url = new URL(location!);
+		expect(url.searchParams.get("scope")).toBe(GOOGLE_MCP_UPSTREAM_SCOPES);
+		expect(url.searchParams.get("access_type")).toBe("offline");
+		expect(url.searchParams.get("prompt")).toBe("consent");
+		expect(url.searchParams.get("client_id")).toBe("google-client-id");
+	});
+});
+
 describe("GoogleHandler /callback OAuth flow", () => {
-	it("allows authorized domain and redirects", async () => {
-		const kv = new InMemoryKv();
+	it("allows authorized domain, stores tokens in GOOGLE_AUTH_KV, and redirects", async () => {
+		const oauthKv = new InMemoryKv();
+		const googleAuthKv = new InMemoryKv();
 		const state = "good-state";
-		const cookie = await seedState(kv, state, { clientId: "abc", scope: "read" });
-		const env = buildEnv(kv);
+		const cookie = await seedState(oauthKv, state, { clientId: "abc", scope: "read" });
+		const env = buildEnv(oauthKv, googleAuthKv);
 
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
-			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-			if (url.includes("/o/oauth2/token")) {
-				return new Response(JSON.stringify({ access_token: "google-token" }), { status: 200 });
-			}
-			if (url.includes("/oauth2/v2/userinfo")) {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.toString()
+						: input.url;
+			if (url.includes("oauth2.googleapis.com/token")) {
 				return new Response(
-					JSON.stringify({ id: "u1", name: "Allowed User", email: "allowed@herdl.com" }),
+					JSON.stringify({
+						access_token: "google-access",
+						refresh_token: "google-refresh",
+						expires_in: 3600,
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("openidconnect.googleapis.com/v1/userinfo")) {
+				return new Response(
+					JSON.stringify({
+						sub: "oidc-sub-1",
+						email: "allowed@herdl.com",
+						name: "Allowed User",
+					}),
 					{ status: 200 },
 				);
 			}
@@ -89,24 +139,86 @@ describe("GoogleHandler /callback OAuth flow", () => {
 		const response = await GoogleHandler.fetch(request, env);
 		expect(response.status).toBe(302);
 		expect(response.headers.get("Location")).toBe("https://client.example/callback?code=ok");
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(fetchMock).toHaveBeenCalled();
+
+		const stored = googleAuthKv.getStored(`${GOOGLE_TOKEN_PREFIX}oidc-sub-1`);
+		expect(stored).toBeTruthy();
+		const parsed = JSON.parse(stored!) as { accessToken: string; refreshToken: string };
+		expect(parsed.accessToken).toBe("google-access");
+		expect(parsed.refreshToken).toBe("google-refresh");
+		vi.unstubAllGlobals();
+	});
+
+	it("rejects when Google omits refresh_token", async () => {
+		const oauthKv = new InMemoryKv();
+		const googleAuthKv = new InMemoryKv();
+		const state = "state-no-refresh";
+		const cookie = await seedState(oauthKv, state, { clientId: "abc", scope: "read" });
+		const env = buildEnv(oauthKv, googleAuthKv);
+
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.toString()
+						: input.url;
+			if (url.includes("oauth2.googleapis.com/token")) {
+				return new Response(
+					JSON.stringify({
+						access_token: "google-access",
+						expires_in: 3600,
+					}),
+					{ status: 200 },
+				);
+			}
+			throw new Error(`unexpected fetch url: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const request = new Request(
+			`https://mcp.example/callback?state=${encodeURIComponent(state)}&code=auth-code`,
+			{ headers: { Cookie: cookie } },
+		);
+
+		const response = await GoogleHandler.fetch(request, env);
+		expect(response.status).toBe(400);
+		const text = await response.text();
+		expect(text).toContain("refresh token");
 		vi.unstubAllGlobals();
 	});
 
 	it("rejects unauthorized domain", async () => {
-		const kv = new InMemoryKv();
+		const oauthKv = new InMemoryKv();
+		const googleAuthKv = new InMemoryKv();
 		const state = "blocked-state";
-		const cookie = await seedState(kv, state, { clientId: "abc", scope: "read" });
-		const env = buildEnv(kv);
+		const cookie = await seedState(oauthKv, state, { clientId: "abc", scope: "read" });
+		const env = buildEnv(oauthKv, googleAuthKv);
 
 		const fetchMock = vi.fn(async (input: string | URL | Request) => {
-			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-			if (url.includes("/o/oauth2/token")) {
-				return new Response(JSON.stringify({ access_token: "google-token" }), { status: 200 });
-			}
-			if (url.includes("/oauth2/v2/userinfo")) {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.toString()
+						: input.url;
+			if (url.includes("oauth2.googleapis.com/token")) {
 				return new Response(
-					JSON.stringify({ id: "u2", name: "Blocked User", email: "blocked@gmail.com" }),
+					JSON.stringify({
+						access_token: "google-access",
+						refresh_token: "r",
+						expires_in: 3600,
+					}),
+					{ status: 200 },
+				);
+			}
+			if (url.includes("openidconnect.googleapis.com/v1/userinfo")) {
+				return new Response(
+					JSON.stringify({
+						sub: "u2",
+						email: "blocked@gmail.com",
+						name: "Blocked User",
+					}),
 					{ status: 200 },
 				);
 			}
@@ -130,8 +242,9 @@ describe("GoogleHandler /callback OAuth flow", () => {
 	});
 
 	it("rejects missing OAuth state", async () => {
-		const kv = new InMemoryKv();
-		const env = buildEnv(kv);
+		const oauthKv = new InMemoryKv();
+		const googleAuthKv = new InMemoryKv();
+		const env = buildEnv(oauthKv, googleAuthKv);
 
 		const response = await GoogleHandler.fetch(
 			new Request("https://mcp.example/callback?code=auth-code"),
@@ -145,10 +258,11 @@ describe("GoogleHandler /callback OAuth flow", () => {
 	});
 
 	it("rejects invalid OAuth state", async () => {
-		const kv = new InMemoryKv();
+		const oauthKv = new InMemoryKv();
+		const googleAuthKv = new InMemoryKv();
 		const invalidState = "unknown-state";
 		const cookieHash = await sha256Hex(invalidState);
-		const env = buildEnv(kv);
+		const env = buildEnv(oauthKv, googleAuthKv);
 
 		const response = await GoogleHandler.fetch(
 			new Request(`https://mcp.example/callback?state=${invalidState}&code=auth-code`, {

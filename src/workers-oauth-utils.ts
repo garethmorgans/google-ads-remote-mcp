@@ -61,8 +61,7 @@ export async function validateOAuthState(request: Request, kv: KVNamespace) {
 	await kv.delete(`oauth:state:${stateFromQuery}`);
 	return {
 		oauthReqInfo: JSON.parse(storedData) as AuthRequest,
-		clearCookie:
-			"__Host-CONSENTED_STATE=; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0",
+		clearCookie: "__Host-CONSENTED_STATE=; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0",
 	};
 }
 

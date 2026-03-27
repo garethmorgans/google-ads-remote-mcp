@@ -1,14 +1,15 @@
+import { getAuthenticatedUserId, getValidAccessToken, type AuthEnv } from "./auth";
+
 /** Central API version for Google Ads REST. */
 export const GOOGLE_ADS_API_VERSION = "v21";
+
+/** Default MCC / manager `login-customer-id` when `GOOGLE_ADS_LOGIN_CUSTOMER_ID` is unset. */
+export const DEFAULT_ADS_LOGIN_CUSTOMER_ID = "6792590365";
 
 const DEFAULT_SEARCH_MAX_ROWS = 10_000;
 const RESOLVER_MAX_ROWS = 50;
 /** Cap for customer_client / MCC expansion queries (searchStream). */
 export const CUSTOMER_CLIENT_MAX_ROWS = 25_000;
-
-export type OAuthTokenResponse = {
-	access_token: string;
-};
 
 export type ListAccessibleCustomersResponse = {
 	resourceNames: string[];
@@ -27,10 +28,8 @@ export function customerIdFromResourceName(resourceName: string): string {
 export function assertGoogleAdsEnv(env: Env): void {
 	const required = [
 		"GOOGLE_ADS_DEVELOPER_TOKEN",
-		"GOOGLE_ADS_LOGIN_CUSTOMER_ID",
-		"GOOGLE_ADS_OAUTH_CLIENT_ID",
-		"GOOGLE_ADS_OAUTH_CLIENT_SECRET",
-		"GOOGLE_ADS_OAUTH_REFRESH_TOKEN",
+		"GOOGLE_CLIENT_ID",
+		"GOOGLE_CLIENT_SECRET",
 	] as const;
 
 	for (const key of required) {
@@ -40,32 +39,19 @@ export function assertGoogleAdsEnv(env: Env): void {
 	}
 }
 
-export async function getGoogleAdsAccessToken(env: Env): Promise<string> {
+/** Access token for Google Ads API using the connected user’s OAuth (KV-backed refresh). */
+export async function getGoogleAdsAccessTokenForUser(env: Env, userId: string): Promise<string> {
 	assertGoogleAdsEnv(env);
+	return getValidAccessToken(env as AuthEnv, userId);
+}
 
-	const response = await fetch("https://oauth2.googleapis.com/token", {
-		method: "POST",
-		headers: {
-			"content-type": "application/x-www-form-urlencoded",
-		},
-		body: new URLSearchParams({
-			client_id: env.GOOGLE_ADS_OAUTH_CLIENT_ID,
-			client_secret: env.GOOGLE_ADS_OAUTH_CLIENT_SECRET,
-			refresh_token: env.GOOGLE_ADS_OAUTH_REFRESH_TOKEN,
-			grant_type: "refresh_token",
-		}),
-	});
-
-	if (!response.ok) {
-		const text = await response.text();
-		throw new Error(`OAuth token exchange failed (${response.status}): ${text}`);
-	}
-
-	const token = (await response.json()) as OAuthTokenResponse;
-	if (!token.access_token) {
-		throw new Error("OAuth token response did not include access_token");
-	}
-	return token.access_token;
+/** Resolves MCP user from context (and optional DO props fallback) and returns a fresh Ads access token. */
+export async function getGoogleAdsAccessTokenFromContext(
+	env: Env,
+	resolveUserId?: () => string | undefined,
+): Promise<string> {
+	const userId = getAuthenticatedUserId(resolveUserId);
+	return getGoogleAdsAccessTokenForUser(env, userId);
 }
 
 export type ListAccessibleCustomersOptions = {
@@ -85,20 +71,18 @@ export function listAccessibleLoginOptions(
  * Effective `login-customer-id` (digits only). Per [Google’s call-structure docs](https://developers.google.com/google-ads/api/docs/concepts/call-structure#cid),
  * this must be the manager when accessing a client account under MCC.
  *
- * Tool override wins only when it contains at least one digit; empty string does not mask `GOOGLE_ADS_LOGIN_CUSTOMER_ID`
+ * Tool override wins only when it contains at least one digit; empty string does not mask env/default
  * (avoids sending a blank header).
+ *
+ * When `GOOGLE_ADS_LOGIN_CUSTOMER_ID` is unset, uses {@link DEFAULT_ADS_LOGIN_CUSTOMER_ID}.
  */
 export function resolveAdsLoginCustomerId(env: Env, override?: string | null): string {
 	if (override != null && /\d/.test(override)) {
 		return normalizeCustomerId(override);
 	}
 	const fromEnv = normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ?? "");
-	if (!fromEnv) {
-		throw new Error(
-			"GOOGLE_ADS_LOGIN_CUSTOMER_ID is missing or invalid. Set this Worker secret to your manager (MCC) numeric customer ID.",
-		);
-	}
-	return fromEnv;
+	if (fromEnv) return fromEnv;
+	return DEFAULT_ADS_LOGIN_CUSTOMER_ID;
 }
 
 /**

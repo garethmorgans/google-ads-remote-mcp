@@ -1,9 +1,15 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { Hono } from "hono";
-import type { AuthProps } from "./oauth-utils";
-import { fetchUpstreamAuthToken, getUpstreamAuthorizeUrl } from "./oauth-utils";
+import { GOOGLE_TOKEN_PREFIX, resolveGoogleUserId } from "./auth";
+import { exchangeAuthCodeForTokens, googleApiRequest } from "./google-token";
+import { getUpstreamAuthorizeUrl, GOOGLE_MCP_UPSTREAM_SCOPES } from "./oauth-utils";
 import { isEmailAllowedForMcp } from "./oauth-domain";
-import { OAuthError, bindStateToSession, createOAuthState, validateOAuthState } from "./workers-oauth-utils";
+import {
+	OAuthError,
+	bindStateToSession,
+	createOAuthState,
+	validateOAuthState,
+} from "./workers-oauth-utils";
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>();
 
@@ -29,24 +35,57 @@ app.get("/callback", async (c) => {
 		const code = c.req.query("code");
 		if (!code) return c.text("Missing code", 400);
 
-		const [accessToken, tokenError] = await fetchUpstreamAuthToken({
-			clientId: c.env.GOOGLE_CLIENT_ID,
-			clientSecret: c.env.GOOGLE_CLIENT_SECRET,
-			code,
-			grantType: "authorization_code",
-			redirectUri: new URL("/callback", c.req.url).href,
-			upstreamUrl: "https://accounts.google.com/o/oauth2/token",
-		});
-		if (tokenError) return tokenError;
+		const redirectUri = new URL("/callback", c.req.url).href;
+		let tokens;
+		try {
+			tokens = await exchangeAuthCodeForTokens(c.env, code, redirectUri);
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			return c.text(`Token exchange failed: ${msg}`, 500);
+		}
 
-		const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-			headers: { Authorization: `Bearer ${accessToken}` },
-		});
-		if (!userInfoResponse.ok) return c.text("Failed to fetch user info", 500);
+		if (!tokens.refreshToken) {
+			return c.text(
+				"Google did not return a refresh token. Revoke this app at https://myaccount.google.com/permissions and connect again.",
+				400,
+			);
+		}
 
-		const userInfo = (await userInfoResponse.json()) as { id: string; name: string; email: string };
+		let userId: string;
+		let email: string;
+		let displayName: string;
+		try {
+			const profile = await googleApiRequest<{ sub?: string; email?: string; name?: string }>(
+				tokens.accessToken,
+				"https://openidconnect.googleapis.com/v1/userinfo",
+			);
+			if (profile.sub && profile.email) {
+				userId = profile.sub;
+				email = profile.email;
+				displayName = profile.name ?? profile.email;
+			} else {
+				userId = await resolveGoogleUserId(tokens.accessToken);
+				const userInfoResponse = await fetch(
+					"https://www.googleapis.com/oauth2/v2/userinfo",
+					{
+						headers: { Authorization: `Bearer ${tokens.accessToken}` },
+					},
+				);
+				if (!userInfoResponse.ok) return c.text("Failed to fetch user info", 500);
+				const userInfo = (await userInfoResponse.json()) as {
+					id: string;
+					name: string;
+					email: string;
+				};
+				email = userInfo.email;
+				displayName = userInfo.name;
+			}
+		} catch {
+			return c.text("Failed to resolve user profile", 500);
+		}
+
 		const domain = allowedDomain(c.env);
-		if (!isEmailAllowedForMcp(userInfo.email, domain)) {
+		if (!isEmailAllowedForMcp(email, domain)) {
 			return new Response(
 				JSON.stringify({
 					error: "access_denied",
@@ -56,16 +95,18 @@ app.get("/callback", async (c) => {
 			);
 		}
 
+		await c.env.GOOGLE_AUTH_KV.put(`${GOOGLE_TOKEN_PREFIX}${userId}`, JSON.stringify(tokens));
+
 		const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
 			request: oauthReqInfo,
 			scope: oauthReqInfo.scope,
-			userId: userInfo.id,
-			metadata: { label: userInfo.name },
+			userId,
+			metadata: { label: displayName },
 			props: {
-				name: userInfo.name,
-				email: userInfo.email,
-				accessToken,
-			} as AuthProps,
+				userId,
+				email,
+				name: displayName,
+			},
 		});
 
 		const headers = new Headers({ Location: redirectTo, "Set-Cookie": clearCookie });
@@ -90,9 +131,11 @@ function redirectToGoogle(
 				upstreamUrl: "https://accounts.google.com/o/oauth2/v2/auth",
 				clientId: env.GOOGLE_CLIENT_ID,
 				redirectUri: new URL("/callback", request.url).href,
-				scope: "email profile",
+				scope: GOOGLE_MCP_UPSTREAM_SCOPES,
 				state: stateToken,
 				hostedDomain: env.HOSTED_DOMAIN,
+				accessType: "offline",
+				prompt: "consent",
 			}),
 		},
 	});

@@ -19,7 +19,9 @@ function str(v: unknown): string | undefined {
 /**
  * Parse numeric customer id from customer_client stream row (REST camelCase).
  */
-export function clientRowToAccountEntry(row: unknown): { customerId: string; entry: AccountRow } | null {
+export function clientRowToAccountEntry(
+	row: unknown,
+): { customerId: string; entry: AccountRow } | null {
 	const cc =
 		getNested(row, "customerClient") ??
 		getNested(row, "customer_client") ??
@@ -111,7 +113,9 @@ export function mergeClientRowsIntoMap(map: MergeAccountMap, clientRows: unknown
 		if (prev === "accessible" || prev === "both") merged.source = "both";
 		else merged.source = "customer_client";
 		if (merged.descriptiveName == null)
-			merged.descriptiveName = (existing.descriptiveName ?? clientEntry.descriptiveName) as string | null;
+			merged.descriptiveName = (existing.descriptiveName ?? clientEntry.descriptiveName) as
+				| string
+				| null;
 		map.set(customerId, merged);
 	}
 }

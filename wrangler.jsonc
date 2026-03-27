@@ -11,24 +11,28 @@
 	"migrations": [
 		{
 			"new_sqlite_classes": ["MyMCP"],
-			"tag": "v1"
-		}
+			"tag": "v1",
+		},
 	],
 	"durable_objects": {
 		"bindings": [
 			{
 				"class_name": "MyMCP",
-				"name": "MCP_OBJECT"
-			}
-		]
+				"name": "MCP_OBJECT",
+			},
+		],
 	},
 	"kv_namespaces": [
 		{
 			"binding": "OAUTH_KV",
-			"id": "23c2a8ec7f7945eaa8bdb0b683f64386"
-		}
+			"id": "23c2a8ec7f7945eaa8bdb0b683f64386",
+		},
+		{
+			"binding": "GOOGLE_AUTH_KV",
+			"id": "0661f14ae0494afab24995780e067853",
+		},
 	],
 	"observability": {
-		"enabled": true
-	}
+		"enabled": true,
+	},
 }

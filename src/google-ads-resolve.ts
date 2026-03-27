@@ -8,6 +8,7 @@ import {
 	customerIdFromResourceName,
 	escapeGaqlString,
 	normalizeCustomerId,
+	resolveAdsLoginCustomerId,
 	RESOLVER_MAX_ROWS,
 	searchStreamCollect,
 } from "./google-ads-api";
@@ -29,7 +30,10 @@ export function nameWhereClause(field: string, raw: string, mode: MatchMode): st
 	return `${field} LIKE '%${e}%'`;
 }
 
-export function wrapResolve(level: ResolvePayload["match_level"], candidates: Array<Record<string, unknown>>): ResolvePayload {
+export function wrapResolve(
+	level: ResolvePayload["match_level"],
+	candidates: Array<Record<string, unknown>>,
+): ResolvePayload {
 	const match_count = candidates.length;
 	let message: string | undefined;
 	if (match_count === 0) {
@@ -272,7 +276,11 @@ export async function listAccountsWithNames(
 				resourceName: getStr(c, "resourceName", "resource_name"),
 			});
 		} else {
-			accounts.push({ customerId: cid, descriptiveName: null, note: "Could not load customer row" });
+			accounts.push({
+				customerId: cid,
+				descriptiveName: null,
+				note: "Could not load customer row",
+			});
 		}
 	}
 	return accounts;
@@ -314,10 +322,7 @@ export async function fetchCustomerClients(
 	managerCustomerId: string,
 	options: ListCustomerClientsOptions = {},
 ): Promise<unknown[]> {
-	const cap = Math.min(
-		options.maxRows ?? CUSTOMER_CLIENT_MAX_ROWS,
-		CUSTOMER_CLIENT_MAX_ROWS,
-	);
+	const cap = Math.min(options.maxRows ?? CUSTOMER_CLIENT_MAX_ROWS, CUSTOMER_CLIENT_MAX_ROWS);
 	const fields =
 		"customer_client.client_customer, customer_client.level, customer_client.manager, customer_client.descriptive_name, customer_client.currency_code, customer_client.time_zone, customer_client.id, customer_client.status, customer_client.resource_name";
 	let query = `SELECT ${fields} FROM customer_client`;
@@ -376,7 +381,10 @@ export async function listAccountsWithNamesMerged(
 		try {
 			const query =
 				"SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager, customer.resource_name FROM customer";
-			const rows = await searchStreamCollect(env, accessToken, cid, query, { maxRows: 1, ...streamLogin });
+			const rows = await searchStreamCollect(env, accessToken, cid, query, {
+				maxRows: 1,
+				...streamLogin,
+			});
 			const parsed = accessibleRowToAccountEntry(cid, rows[0] ?? null);
 			if (parsed) map.set(parsed.customerId, parsed.entry);
 		} catch (e) {
@@ -398,7 +406,7 @@ export async function listAccountsWithNamesMerged(
 	if (options.includeCustomerClients) {
 		const managerId = options.managerCustomerId
 			? normalizeCustomerId(options.managerCustomerId)
-			: normalizeCustomerId(env.GOOGLE_ADS_LOGIN_CUSTOMER_ID);
+			: resolveAdsLoginCustomerId(env);
 		try {
 			const clientRows = await fetchCustomerClients(env, accessToken, managerId, {
 				onlyLeafAccounts: options.onlyLeafAccounts,

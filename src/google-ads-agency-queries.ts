@@ -36,7 +36,11 @@ export function queryAccountBudgetPacing(during: string): string {
 	return `SELECT account_budget.id, account_budget.name, account_budget.status, account_budget.amount_micros, account_budget.adjusted_spending_limit_micros, account_budget.total_adjustments_micros, segments.date, metrics.cost_micros FROM account_budget WHERE ${during}`;
 }
 
-export function queryCampaignPerformanceById(campaignId: string, during: string, withIs: boolean): string {
+export function queryCampaignPerformanceById(
+	campaignId: string,
+	during: string,
+	withIs: boolean,
+): string {
 	const base =
 		"campaign.id, campaign.name, segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.ctr, metrics.conversions, metrics.conversions_value, metrics.average_cpc, metrics.cost_per_conversion";
 	const isFields = withIs
@@ -45,7 +49,10 @@ export function queryCampaignPerformanceById(campaignId: string, during: string,
 	return `SELECT ${base}${isFields} FROM campaign WHERE campaign.id = ${campaignId} AND ${during}`;
 }
 
-export function queryCampaignOverview(during: string, orderMetric: "cost_micros" | "conversions"): string {
+export function queryCampaignOverview(
+	during: string,
+	orderMetric: "cost_micros" | "conversions",
+): string {
 	const order =
 		orderMetric === "conversions" ? "metrics.conversions DESC" : "metrics.cost_micros DESC";
 	return `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.ctr, metrics.cost_per_conversion FROM campaign WHERE campaign.status != REMOVED AND ${during} ORDER BY ${order}`;
@@ -64,7 +71,11 @@ export function queryKeywordQualityScores(during: string): string {
 	return `SELECT campaign.id, campaign.name, metrics.quality_score, metrics.impressions, metrics.clicks FROM keyword_view WHERE metrics.impressions > 0 AND metrics.quality_score > 0 AND ${during}`;
 }
 
-export function queryAdGroupsByCampaign(campaignId: string, during: string, withMetrics: boolean): string {
+export function queryAdGroupsByCampaign(
+	campaignId: string,
+	during: string,
+	withMetrics: boolean,
+): string {
 	const base = `ad_group.id, ad_group.name, ad_group.status, ad_group.cpc_bid_micros, campaign.id`;
 	const metrics = withMetrics
 		? ", metrics.impressions, metrics.clicks, metrics.ctr, metrics.cost_micros, metrics.conversions, metrics.cost_per_conversion"
@@ -77,7 +88,11 @@ export function queryAdGroupPerformance(adGroupId: string, during: string): stri
 }
 
 /** Full keyword report with QS and bids */
-export function queryKeywordPerformance(campaignId: string, adGroupFilter: string, during: string): string {
+export function queryKeywordPerformance(
+	campaignId: string,
+	adGroupFilter: string,
+	during: string,
+): string {
 	return `SELECT campaign.name, ad_group.name, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ad_group_criterion.status, ad_group_criterion.cpc_bid_micros, ad_group_criterion.effective_cpc_bid_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.ctr, metrics.conversions, metrics.quality_score, metrics.historical_quality_score, metrics.search_impression_share, metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share FROM keyword_view WHERE campaign.id = ${campaignId}${adGroupFilter} AND ${during}`;
 }
 
@@ -90,9 +105,7 @@ export function queryKeywordsByAccount(
 ): string {
 	const cond: string[] = [`${during}`];
 	if (matchTypes?.length) {
-		cond.push(
-			`ad_group_criterion.keyword.match_type IN (${matchTypes.join(", ")})`,
-		);
+		cond.push(`ad_group_criterion.keyword.match_type IN (${matchTypes.join(", ")})`);
 	}
 	if (statusFilter) {
 		cond.push(`ad_group_criterion.status = ${statusFilter}`);
