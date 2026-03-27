@@ -111,6 +111,8 @@ describe("GoogleHandler /callback OAuth flow", () => {
 						access_token: "google-access",
 						refresh_token: "google-refresh",
 						expires_in: 3600,
+						scope:
+							"openid email profile https://www.googleapis.com/auth/adwords https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
 					}),
 					{ status: 200 },
 				);
@@ -188,6 +190,47 @@ describe("GoogleHandler /callback OAuth flow", () => {
 		vi.unstubAllGlobals();
 	});
 
+	it("rejects when token response omits Google Ads (adwords) scope", async () => {
+		const oauthKv = new InMemoryKv();
+		const googleAuthKv = new InMemoryKv();
+		const state = "no-adwords-scope";
+		const cookie = await seedState(oauthKv, state, { clientId: "abc", scope: "read" });
+		const env = buildEnv(oauthKv, googleAuthKv);
+
+		const fetchMock = vi.fn(async (input: string | URL | Request) => {
+			const url =
+				typeof input === "string"
+					? input
+					: input instanceof URL
+						? input.toString()
+						: input.url;
+			if (url.includes("oauth2.googleapis.com/token")) {
+				return new Response(
+					JSON.stringify({
+						access_token: "google-access",
+						refresh_token: "google-refresh",
+						expires_in: 3600,
+						scope: "email profile openid",
+					}),
+					{ status: 200 },
+				);
+			}
+			throw new Error(`unexpected fetch url: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const request = new Request(
+			`https://mcp.example/callback?state=${encodeURIComponent(state)}&code=auth-code`,
+			{ headers: { Cookie: cookie } },
+		);
+
+		const response = await GoogleHandler.fetch(request, env);
+		expect(response.status).toBe(400);
+		const text = await response.text();
+		expect(text).toContain("Google Ads API OAuth scope");
+		vi.unstubAllGlobals();
+	});
+
 	it("rejects unauthorized domain", async () => {
 		const oauthKv = new InMemoryKv();
 		const googleAuthKv = new InMemoryKv();
@@ -208,6 +251,7 @@ describe("GoogleHandler /callback OAuth flow", () => {
 						access_token: "google-access",
 						refresh_token: "r",
 						expires_in: 3600,
+						scope: "openid email profile https://www.googleapis.com/auth/adwords",
 					}),
 					{ status: 200 },
 				);

@@ -122,6 +122,8 @@ This project **extends** the read-only surface of [googleads/google-ads-mcp](htt
 
 **Google Cloud Console**: For the same OAuth client, add **`https://www.googleapis.com/auth/adwords`** to the OAuth consent screen (and enable the **Google Ads API** on the project). After deploying this change, **reconnect** the MCP in Claude so users grant the new scope.
 
+**Troubleshooting (OAuth scope)**: The `/callback` redirect from Google may list only **email / profile / openid** in `scope=` even when the app requests Ads. The Worker checks the **token exchange** response (`scope` in the JSON from `oauth2.googleapis.com/token`). If **`adwords`** was not granted, connect fails with a clear error—ensure **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`** match the **same** OAuth Web client that has the Ads scope on the consent screen, then revoke the app at [Google Account permissions](https://myaccount.google.com/permissions) and reconnect.
+
 **Troubleshooting (MCC / child queries)**: `PERMISSION_DENIED` or “wrong customer” when using a leaf `customer_id` often means **`login_customer_id`** / env default is wrong (e.g. set to a **client** instead of the **parent manager**). Optional **`GOOGLE_ADS_LOGIN_CUSTOMER_ID`** overrides the default MCC; tool arg **`login_customer_id`** overrides for a single call.
 
 ## Prerequisites

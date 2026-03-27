@@ -60,7 +60,7 @@ export async function getValidAccessToken(env: AuthEnv, userId: string): Promise
 		if (!token.refreshToken) {
 			throw new Error("Access token expired and no refresh token available.");
 		}
-		token = await refreshAccessToken(env as GoogleOAuthClientEnv, token.refreshToken);
+		token = await refreshAccessToken(env as GoogleOAuthClientEnv, token.refreshToken, token.scope);
 		await env.GOOGLE_AUTH_KV.put(`${GOOGLE_TOKEN_PREFIX}${userId}`, JSON.stringify(token));
 	}
 

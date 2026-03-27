@@ -10,6 +10,12 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
 export type GoogleOAuthClientEnv = Pick<Env, "GOOGLE_CLIENT_ID" | "GOOGLE_CLIENT_SECRET">;
 
+/** True if Google’s token `scope` string includes Google Ads API (`adwords`). */
+export function tokenResponseHasGoogleAdsScope(scope: string | undefined): boolean {
+	if (!scope?.trim()) return false;
+	return scope.includes("adwords");
+}
+
 export async function exchangeAuthCodeForTokens(
 	env: GoogleOAuthClientEnv,
 	code: string,
@@ -50,6 +56,7 @@ export async function exchangeAuthCodeForTokens(
 export async function refreshAccessToken(
 	env: GoogleOAuthClientEnv,
 	refreshToken: string,
+	previousScope?: string,
 ): Promise<OAuthTokenRecord> {
 	const body = new URLSearchParams({
 		client_id: env.GOOGLE_CLIENT_ID,
@@ -76,7 +83,7 @@ export async function refreshAccessToken(
 		accessToken: json.access_token,
 		refreshToken,
 		expiryDate: Date.now() + json.expires_in * 1000 - 60_000,
-		scope: json.scope,
+		scope: json.scope ?? previousScope,
 		tokenType: json.token_type,
 	};
 }

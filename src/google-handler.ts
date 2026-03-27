@@ -1,7 +1,11 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { Hono } from "hono";
 import { GOOGLE_TOKEN_PREFIX, resolveGoogleUserId } from "./auth";
-import { exchangeAuthCodeForTokens, googleApiRequest } from "./google-token";
+import {
+	exchangeAuthCodeForTokens,
+	googleApiRequest,
+	tokenResponseHasGoogleAdsScope,
+} from "./google-token";
 import { getUpstreamAuthorizeUrl, GOOGLE_MCP_UPSTREAM_SCOPES } from "./oauth-utils";
 import { isEmailAllowedForMcp } from "./oauth-domain";
 import {
@@ -47,6 +51,19 @@ app.get("/callback", async (c) => {
 		if (!tokens.refreshToken) {
 			return c.text(
 				"Google did not return a refresh token. Revoke this app at https://myaccount.google.com/permissions and connect again.",
+				400,
+			);
+		}
+
+		if (!tokenResponseHasGoogleAdsScope(tokens.scope)) {
+			return c.text(
+				[
+					"Google did not grant the Google Ads API OAuth scope (adwords).",
+					`Token scope from Google was: "${tokens.scope ?? "(missing)"}".`,
+					"The /callback URL scope= line can omit sensitive scopes; the token response is what matters.",
+					"Fix: revoke this app at https://myaccount.google.com/permissions , then reconnect.",
+					"Confirm Worker secrets GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET match the OAuth Web client in Google Cloud that has https://www.googleapis.com/auth/adwords on the consent screen.",
+				].join(" "),
 				400,
 			);
 		}
