@@ -1,147 +1,57 @@
-# Google Ads Remote MCP (Read-Only) on Cloudflare
+# Google Ads MCC MCP (read-only) on Cloudflare
 
-Remote MCP server for **read-only Google Ads** reporting and analysis. It uses **MCP OAuth** (Claude Cowork / Inspector) plus **Google sign-in** with a **domain allowlist** (default `@herdl.com`).
+Remote MCP server for **read-only Google Ads** access scoped around a **manager (MCC)** workflow. It uses **MCP OAuth** (Inspector / compatible clients) plus **Google sign-in** with an optional **email domain allowlist** (default `@herdl.com`).
 
-This project **extends** the read-only surface of [googleads/google-ads-mcp](https://github.com/googleads/google-ads-mcp?tab=readme-ov-file) with the same core ideas (`list_accessible_customers`, structured `search`) and adds **agency-style GAQL tools**, **MCC-aware account listing**, and **name-first** helpers for conversational clients.
+**v2** exposes only three discovery/query tools. Earlier versions included many agency-style helpers; those have been removed for a clean rebuild. Clients that depended on removed tools must migrate to **`gaql_search`** with raw GAQL.
 
-## `listAccessibleCustomers` vs MCC client accounts
+## Tools
 
-[`listAccessibleCustomers`](https://developers.google.com/google-ads/api/reference/rpc/google.ads.googleads.v21.services#google.ads.googleads.v21.services.CustomerService.ListAccessibleCustomers) returns customers the user can access **directly**. Under a **manager (MCC)** account, many **linked client accounts** do **not** appear there.
+| Tool                            | Purpose                                                                                                                                                                                                                |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`list_accessible_customers`** | Wraps [`customers:listAccessibleCustomers`](https://developers.google.com/google-ads/api/reference/rest/v21/customers/listAccessibleCustomers). Optional `ids_only`, `login_customer_id`, `include_manager_context`.   |
+| **`list_customer_clients`**     | `FROM customer_client` via `googleAds:searchStream` on the manager customer (default: resolved MCC). Optional `manager_customer_id`, `only_leaf_accounts`, `max_rows`. Response includes **`login_customer_id_used`**. |
+| **`gaql_search`**               | Raw GAQL against `customers/{customer_id}/googleAds:searchStream`. Pass numeric `customer_id`, full `query`, optional `max_rows` and `login_customer_id`.                                                              |
 
-- **`list_customer_clients`** — Lists linked accounts via `FROM customer_client` (bounded stream, default cap **25,000** rows).
-- **`list_accounts_with_names`** — By default (**`include_customer_clients: true`**), merges `listAccessibleCustomers` with `customer_client` rows from your login MCC (or `manager_customer_id`), **deduped by customer ID**. Per-account enrichment errors are collected in **`errors`** instead of failing the whole call.
-
-## Official-parity vs convenience tools
-
-| Tool                            | Notes                                                                                                                                                                                                                                                                                                  |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`search`**                    | Same shape as [google-ads-mcp `search`](https://github.com/googleads/google-ads-mcp/blob/main/ads_mcp/tools/search.py): `customer_id`, `fields[]`, `resource`, optional `conditions`, `orderings`, `limit`; appends `PARAMETERS omit_unselected_resource_names=true`. **ID-based** `customer_id` only. |
-| **`gaql_search`**               | Full GAQL string; requires **exactly one** of `account_name` or `customer_id`. Does **not** add the PARAMETERS line unless you include it.                                                                                                                                                             |
-| **`list_accessible_customers`** | Set **`ids_only: true`** for a plain ID list like the official server.                                                                                                                                                                                                                                 |
-
-## MCP tools (read-only)
-
-### Core / discovery
-
-| Tool                                                       | Purpose                                                |
-| ---------------------------------------------------------- | ------------------------------------------------------ |
-| `list_accessible_customers`                                | Direct roots from API; optional `ids_only`.            |
-| `list_accounts_with_names`                                 | Accessible + optional MCC merge; `errors` / `sources`. |
-| `list_customer_clients`                                    | Raw `customer_client` stream.                          |
-| `resolve_customer`, `resolve_campaign`, `resolve_ad_group` | Name disambiguation.                                   |
-| **`search`**                                               | Official-style GAQL builder.                           |
-| `gaql_search`                                              | Raw GAQL + `account_name` or `customer_id`.            |
-
-### Account / campaigns
-
-| Tool                                    | Purpose                                                   |
-| --------------------------------------- | --------------------------------------------------------- |
-| `get_account_performance_by_name`       | Daily customer metrics by preset range.                   |
-| **`get_account_summary`**               | Rolled-up KPIs (CTR, CPC, CPA, ROAS) for a range.         |
-| **`get_account_budget_and_pacing`**     | `account_budget` + spend (calendar range).                |
-| **`list_campaigns`**                    | Campaigns with channel, bidding, budget linkage.          |
-| `get_campaign_performance_by_name`      | Campaign daily metrics + **Search IS / lost IS / top %**. |
-| **`get_campaign_performance_overview`** | All campaigns ranked; optional `compare_date_range`.      |
-| **`get_campaign_bidding_and_budget`**   | Strategies, budgets, spend.                               |
-| **`get_campaign_quality_metrics`**      | Search IS + impression-weighted QS sample.                |
-
-### Ad groups / keywords / search terms
-
-| Tool                                                                | Purpose                                                   |
-| ------------------------------------------------------------------- | --------------------------------------------------------- |
-| `list_ad_groups_by_campaign_name`, **`list_ad_groups_by_campaign`** | Ad groups; optional **`include_metrics`** + `date_range`. |
-| **`get_ad_group_performance`**                                      | Ad group + date metrics.                                  |
-| `get_keyword_performance_by_names`                                  | `keyword_view` with QS + IS fields.                       |
-| **`get_keywords_by_account`**                                       | Account-wide keywords + filters.                          |
-| **`get_low_quality_score_keywords`**                                | QS below threshold.                                       |
-| `get_search_terms_by_campaign_name`, **`get_search_terms_report`**  | Query report + matched keyword / conversions.             |
-
-### Creatives
-
-| Tool                                   | Purpose                                      |
-| -------------------------------------- | -------------------------------------------- |
-| **`get_ad_performance_by_campaign`**   | RSA-level metrics + policy summary.          |
-| **`get_asset_performance`**            | `ad_group_ad_asset_view`.                    |
-| **`get_responsive_search_ad_details`** | Headlines, descriptions, paths, ad strength. |
-| **`get_ad_strength_report`**           | Ad strength across RSAs.                     |
-
-### Segments
-
-| Tool                              | Purpose                      |
-| --------------------------------- | ---------------------------- |
-| **`get_audience_performance`**    | `campaign_audience_view`.    |
-| **`get_demographic_performance`** | Age / gender / income views. |
-| **`get_device_performance`**      | `segments.device`.           |
-| **`get_geographic_performance`**  | `geographic_view`.           |
-
-### Shopping / Performance Max
-
-| Tool                                   | Purpose                                           |
-| -------------------------------------- | ------------------------------------------------- |
-| **`get_shopping_product_performance`** | `shopping_performance_view`.                      |
-| **`get_pmax_asset_group_performance`** | Asset groups (PMax campaigns).                    |
-| **`get_pmax_search_terms`**            | `campaign_search_term_view` (limited visibility). |
-
-### Conversions / attribution / audit
-
-| Tool                                         | Purpose                                                   |
-| -------------------------------------------- | --------------------------------------------------------- |
-| **`list_conversion_actions`**                | Conversion action definitions.                            |
-| **`get_conversion_performance_by_campaign`** | By campaign + conversion action segment.                  |
-| **`get_attribution_path_report`**            | **Simplified**: account metrics proxy (not full path UI). |
-| **`get_auction_insights`**                   | Per **campaign** competitive metrics (`auction_insight`). |
-| **`get_change_history`**                     | `change_event` (bounded `limit` ≤ 10,000).                |
-
-### MCC (portfolio)
-
-| Tool                               | Purpose                                                              |
-| ---------------------------------- | -------------------------------------------------------------------- |
-| **`get_mcc_performance_overview`** | KPI per linked client (`max_accounts` cap).                          |
-| **`get_mcc_budget_pacing`**        | This-month spend + `account_budget` rows per client.                 |
-| **`get_mcc_anomaly_alerts`**       | WoW-style flags (conversions, spend, CTR); `compare_range` optional. |
-
-**`match_mode`**: `contains` (default) or `exact`. **Date presets**: includes `LAST_*`, `THIS_MONTH`, `PREVIOUS_7_DAYS`, `PREVIOUS_30_DAYS`, etc. Optional **`date_start` / `date_end`** (`YYYY-MM-DD`) on many agency tools.
-
-**Disambiguation**: If `match_count` ≠ 1, tools return `report: "not_run_needs_resolution"` and `candidates`.
-
-**Field reference**: [GAQL grammar](https://developers.google.com/google-ads/api/docs/query/grammar), [fields (v21)](https://developers.google.com/google-ads/api/fields/v21/overview). Some views (e.g. auction insights, demographics) depend on campaign type and account features; use raw **`search`** if a tool errors.
+[`listAccessibleCustomers`](https://developers.google.com/google-ads/api/reference/rpc/google.ads.googleads.v21.services#google.ads.googleads.v21.services.CustomerService.ListAccessibleCustomers) returns accounts the user can reach **directly**. Many **linked client accounts** under an MCC appear only via **`list_customer_clients`** or explicit GAQL to the client id with the correct **`login-customer-id`** header.
 
 ## Architecture
 
 - Cloudflare Workers + Durable Objects (`MyMCP`) + `OAuthProvider`
-- **HTTP**: `/mcp` (MCP), `/authorize`, `/callback`, `/token`, `/register`
-- **MCP gate + Google Ads**: one **OAuth Web client** (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`), KV `OAUTH_KV` (OAuth state) and **`GOOGLE_AUTH_KV`** (per-user Google access + refresh tokens after connect)
-- **Ads API**: `GOOGLE_ADS_DEVELOPER_TOKEN` (Worker-level); each MCP user connects with Google and grants **`https://www.googleapis.com/auth/adwords`** alongside `email` / `profile` / `openid`. **`listAccessibleCustomers`** + **`searchStream`** only (no mutates). The **`login-customer-id`** header defaults to MCC **`6792590365`** unless you set optional **`GOOGLE_ADS_LOGIN_CUSTOMER_ID`** (digits or hyphenated). That must be the **manager** when querying child accounts, per [Google’s access model](https://developers.google.com/google-ads/api/concepts/call-structure).
+- **Routes**: `/mcp` (MCP), `/authorize`, `/callback`, `/token`, `/register`
+- **KV**: `OAUTH_KV` (OAuth state), **`GOOGLE_AUTH_KV`** (per-user Google access + refresh tokens)
+- **Ads**: `GOOGLE_ADS_DEVELOPER_TOKEN`; users grant **`https://www.googleapis.com/auth/adwords`** with `openid` / `email` / `profile`. Calls use REST **v21** and **`googleAds:searchStream`** (read-only). The **`login-customer-id`** header defaults to **`6792590365`** unless **`GOOGLE_ADS_LOGIN_CUSTOMER_ID`** is set; it must be the **manager** when querying child accounts ([call structure](https://developers.google.com/google-ads/api/docs/concepts/call-structure)).
 
-## Single OAuth client (required)
+## OAuth client (single Web client)
 
-| Purpose                        | Secrets / bindings                                                       | Notes                                                                                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **MCP + Google sign-in + Ads** | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_AUTH_KV`, `OAUTH_KV` | Redirect URI **`/callback`** only. Scopes include **`adwords`**; **`access_type=offline`** so refresh tokens are stored per user in `GOOGLE_AUTH_KV`. |
-| **Google Ads API (non-user)**  | `GOOGLE_ADS_DEVELOPER_TOKEN`                                             | Developer token (same for all users).                                                                                                                 |
+| Item     | Notes                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------- |
+| Secrets  | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_AUTH_KV`, `OAUTH_KV`                       |
+| Redirect | **`/callback`** only (not `/mcp`)                                                              |
+| Scopes   | Include **`adwords`**; **`access_type=offline`** so refresh tokens persist in `GOOGLE_AUTH_KV` |
 
-**Google Cloud Console**: For the same OAuth client, add **`https://www.googleapis.com/auth/adwords`** to the OAuth consent screen (and enable the **Google Ads API** on the project). After deploying this change, **reconnect** the MCP in Claude so users grant the new scope.
+Enable **Google Ads API** on the GCP project and add the Ads scope on the consent screen. After scope changes, users should **reconnect** the MCP.
 
-**Troubleshooting (OAuth scope)**: The `/callback` redirect from Google may list only **email / profile / openid** in `scope=` even when the app requests Ads. The Worker checks the **token exchange** response (`scope` in the JSON from `oauth2.googleapis.com/token`). If **`adwords`** was not granted, connect fails with a clear error—ensure **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`** match the **same** OAuth Web client that has the Ads scope on the consent screen, then revoke the app at [Google Account permissions](https://myaccount.google.com/permissions) and reconnect.
+**Scope in URL**: Google’s `/callback` `scope=` may omit sensitive scopes; this Worker validates the **token** response includes Ads access where required.
 
-**Troubleshooting (MCC / child queries)**: `PERMISSION_DENIED` or “wrong customer” when using a leaf `customer_id` often means **`login_customer_id`** / env default is wrong (e.g. set to a **client** instead of the **parent manager**). Optional **`GOOGLE_ADS_LOGIN_CUSTOMER_ID`** overrides the default MCC; tool arg **`login_customer_id`** overrides for a single call.
+**MCC errors**: `PERMISSION_DENIED` on a leaf `customer_id` often means **`login-customer-id`** is wrong (use the parent manager, or set `GOOGLE_ADS_LOGIN_CUSTOMER_ID` / tool `login_customer_id`).
 
 ## Prerequisites
 
 - Google Cloud: **Google Ads API** enabled
-- **OAuth Web client** redirect URIs: `http://localhost:8787/callback`, `https://<worker>/callback` (**not** `/mcp`)
-- KV namespace `OAUTH_KV` and **`GOOGLE_AUTH_KV`** in [wrangler.jsonc](wrangler.jsonc)
+- OAuth Web client redirect URIs: `http://localhost:8787/callback`, `https://<worker>.workers.dev/callback`
+- KV namespaces in [`wrangler.jsonc`](wrangler.jsonc): `OAUTH_KV`, `GOOGLE_AUTH_KV`
 
-Optional: `ALLOWED_EMAIL_DOMAIN`, `HOSTED_DOMAIN`
+Optional env: `ALLOWED_EMAIL_DOMAIN`, `HOSTED_DOMAIN`
 
-## Worker secrets
+## Secrets
 
 ```bash
 npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put GOOGLE_ADS_DEVELOPER_TOKEN
-# Optional: override default MCC login-customer-id (6792590365)
+# Optional: override default MCC for login-customer-id (default 6792590365)
 # npx wrangler secret put GOOGLE_ADS_LOGIN_CUSTOMER_ID
+npx wrangler secret put COOKIE_ENCRYPTION_KEY
 ```
 
 ## Local development
@@ -153,15 +63,13 @@ npm test
 npm run dev
 ```
 
-- MCP: `http://localhost:8787/mcp`
+- MCP endpoint: `http://localhost:8787/mcp` (port from Wrangler output)
 
-### MCP Inspector / Claude Cowork
+### Inspector
 
-1. Use **Direct** transport (not Via Proxy) unless you configure a proxy token.
-2. Connect to `/mcp`, complete Google (allowed domain).
-3. For **full client lists**: **`list_accounts_with_names`** (default merge) or **`list_customer_clients`**. The response includes **`login_customer_id_used`** (digits only) so you can confirm which manager ID was sent as `login-customer-id` on each Ads request.
-4. For **official-style reporting**: **`search`** with numeric `customer_id`.
-5. For **chat-first** names: **`resolve_*`** and agency tools with `account_name`.
+1. Connect with the Worker `/mcp` URL.
+2. Complete Google OAuth (allowed domain if configured).
+3. Use **`list_accessible_customers`** / **`list_customer_clients`** for discovery, then **`gaql_search`** with explicit GAQL. Check **`login_customer_id_used`** in responses when debugging headers.
 
 ## Deploy
 
@@ -171,15 +79,11 @@ npm run deploy
 
 ## Limits
 
-- **`search`** / **`gaql_search`**: stream cap **10,000** rows (`gaql_search` optional `max_rows`).
+- **`gaql_search`**: default **10,000** rows max per call (`max_rows` capped the same).
 - **`list_customer_clients`**: cap **25,000** rows.
-- **MCC tools**: default **25–40** accounts per call (`max_accounts`) to reduce Worker timeouts.
-- **`get_change_history`**: `limit` ≤ **10,000**.
-- **Resolvers**: **50** matches per stage.
-- Read-only: no `Mutate` calls.
+- Read-only: no mutate calls.
 
 ## References
 
-- [googleads/google-ads-mcp](https://github.com/googleads/google-ads-mcp?tab=readme-ov-file)
 - [Google Ads API / GAQL](https://developers.google.com/google-ads/api/docs/query/overview)
-- [Remote MCP + auth (Cloudflare)](https://developers.cloudflare.com/agents/guides/remote-mcp-server/#add-authentication)
+- [Remote MCP (Cloudflare)](https://developers.cloudflare.com/agents/guides/remote-mcp-server/#add-authentication)

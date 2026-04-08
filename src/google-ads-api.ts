@@ -7,7 +7,6 @@ export const GOOGLE_ADS_API_VERSION = "v21";
 export const DEFAULT_ADS_LOGIN_CUSTOMER_ID = "6792590365";
 
 const DEFAULT_SEARCH_MAX_ROWS = 10_000;
-const RESOLVER_MAX_ROWS = 50;
 /** Cap for customer_client / MCC expansion queries (searchStream). */
 export const CUSTOMER_CLIENT_MAX_ROWS = 25_000;
 
@@ -257,4 +256,36 @@ function appendSearchStreamRows(parsed: unknown, rows: unknown[], maxRows: numbe
 	return false;
 }
 
-export { DEFAULT_SEARCH_MAX_ROWS, RESOLVER_MAX_ROWS };
+export type ListCustomerClientsOptions = {
+	onlyLeafAccounts?: boolean;
+	maxRows?: number;
+	loginCustomerId?: string;
+};
+
+/**
+ * Lists accounts linked under an MCC (manager customer_id in URL path).
+ * Complements listAccessibleCustomers, which often returns fewer direct roots.
+ */
+export async function fetchCustomerClients(
+	env: Env,
+	accessToken: string,
+	managerCustomerId: string,
+	options: ListCustomerClientsOptions = {},
+): Promise<unknown[]> {
+	const cap = Math.min(options.maxRows ?? CUSTOMER_CLIENT_MAX_ROWS, CUSTOMER_CLIENT_MAX_ROWS);
+	const fields =
+		"customer_client.client_customer, customer_client.level, customer_client.manager, customer_client.descriptive_name, customer_client.currency_code, customer_client.time_zone, customer_client.id, customer_client.status, customer_client.resource_name";
+	let query = `SELECT ${fields} FROM customer_client`;
+	if (options.onlyLeafAccounts) {
+		query += " WHERE customer_client.manager = FALSE";
+	}
+	const streamLogin = options.loginCustomerId?.replace(/\D/g, "")
+		? { loginCustomerId: normalizeCustomerId(options.loginCustomerId) }
+		: { loginCustomerId: normalizeCustomerId(managerCustomerId) };
+	return searchStreamCollect(env, accessToken, normalizeCustomerId(managerCustomerId), query, {
+		maxRows: cap,
+		...streamLogin,
+	});
+}
+
+export { DEFAULT_SEARCH_MAX_ROWS };

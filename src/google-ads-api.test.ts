@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	DEFAULT_ADS_LOGIN_CUSTOMER_ID,
 	escapeGaqlString,
+	fetchCustomerClients,
 	GOOGLE_ADS_API_VERSION,
 	listAccessibleCustomers,
 	normalizeCustomerId,
 	resolveAdsLoginCustomerId,
 	searchStreamCollect,
 } from "./google-ads-api";
-import { fetchCustomerClients } from "./google-ads-resolve";
 
 describe("escapeGaqlString", () => {
 	it("escapes single quotes and backslashes", () => {
