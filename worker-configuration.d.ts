@@ -14,6 +14,11 @@ declare namespace Cloudflare {
 		GOOGLE_ADS_DEVELOPER_TOKEN: string;
 		/** Optional override; defaults to MCC 6792590365 when unset. */
 		GOOGLE_ADS_LOGIN_CUSTOMER_ID?: string;
+		/**
+		 * Set to `1` or `true` to log Google Ads REST diagnostics (URLs, headers, stream stats, raw body preview).
+		 * Does not log access tokens. Use Wrangler vars or `wrangler secret` as a plain var in dashboard.
+		 */
+		GOOGLE_ADS_DEBUG?: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

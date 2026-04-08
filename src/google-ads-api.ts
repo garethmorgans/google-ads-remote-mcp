@@ -10,6 +10,23 @@ const DEFAULT_SEARCH_MAX_ROWS = 10_000;
 /** Cap for customer_client / MCC expansion queries (searchStream). */
 export const CUSTOMER_CLIENT_MAX_ROWS = 25_000;
 
+/** Max characters of raw response body to log when `GOOGLE_ADS_DEBUG` is on and parsing yields 0 rows. */
+const SEARCH_STREAM_RAW_PREVIEW_MAX = 12_000;
+
+export function isGoogleAdsDebugEnabled(env: Env): boolean {
+	const v = env.GOOGLE_ADS_DEBUG?.toLowerCase().trim();
+	return v === "1" || v === "true" || v === "yes";
+}
+
+function adsDebug(env: Env, message: string, data?: Record<string, unknown>): void {
+	if (!isGoogleAdsDebugEnabled(env)) return;
+	if (data !== undefined) {
+		console.warn(`[google-ads-api] ${message}`, data);
+	} else {
+		console.warn(`[google-ads-api] ${message}`);
+	}
+}
+
 export type ListAccessibleCustomersResponse = {
 	resourceNames: string[];
 };
@@ -110,6 +127,10 @@ export async function listAccessibleCustomers(
 	options?: ListAccessibleCustomersOptions,
 ): Promise<string[]> {
 	const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers:listAccessibleCustomers`;
+	adsDebug(env, "listAccessibleCustomers request", {
+		url,
+		loginCustomerId: resolveAdsLoginCustomerId(env, options?.loginCustomerId),
+	});
 	const response = await fetch(url, {
 		method: "GET",
 		headers: googleAdsRequestHeaders(env, accessToken, {
@@ -123,7 +144,14 @@ export async function listAccessibleCustomers(
 	}
 
 	const payload = (await response.json()) as ListAccessibleCustomersResponse;
-	return payload.resourceNames ?? [];
+	const names = payload.resourceNames ?? [];
+	adsDebug(env, "listAccessibleCustomers ok", {
+		status: response.status,
+		requestId: response.headers.get("request-id") ?? undefined,
+		count: names.length,
+		sample: names.slice(0, 8),
+	});
+	return names;
 }
 
 /** Escape single quotes for GAQL string literals. */
@@ -161,7 +189,18 @@ export async function searchStreamCollect(
 	options: SearchStreamOptions = {},
 ): Promise<unknown[]> {
 	const maxRows = options.maxRows ?? DEFAULT_SEARCH_MAX_ROWS;
-	const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${normalizeCustomerId(customerId)}/googleAds:searchStream`;
+	const cid = normalizeCustomerId(customerId);
+	const url = `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${cid}/googleAds:searchStream`;
+	const loginResolved = resolveAdsLoginCustomerId(env, options.loginCustomerId);
+
+	adsDebug(env, "searchStream request", {
+		url,
+		customerId: cid,
+		loginCustomerId: loginResolved,
+		maxRows,
+		queryLength: query.length,
+		queryPreview: query.length > 500 ? `${query.slice(0, 500)}…` : query,
+	});
 
 	const response = await fetch(url, {
 		method: "POST",
@@ -172,8 +211,21 @@ export async function searchStreamCollect(
 		body: JSON.stringify({ query }),
 	});
 
+	const requestId = response.headers.get("request-id") ?? undefined;
+	adsDebug(env, "searchStream response headers", {
+		ok: response.ok,
+		status: response.status,
+		contentType: response.headers.get("content-type") ?? undefined,
+		requestId,
+	});
+
 	if (!response.ok) {
 		const text = await response.text();
+		console.warn("[google-ads-api] searchStream HTTP error", {
+			status: response.status,
+			requestId,
+			bodyPreview: text.slice(0, 2000),
+		});
 		throw new Error(`Google Ads searchStream failed (${response.status}): ${text}`);
 	}
 
@@ -181,47 +233,153 @@ export async function searchStreamCollect(
 	const body = response.body;
 	if (!body) {
 		const text = await response.text();
-		return parseSearchStreamText(text, rows, maxRows);
+		adsDebug(env, "searchStream body was null; using response.text()", {
+			textLength: text.length,
+			textPreview: text.slice(0, 800),
+		});
+		const out = parseSearchStreamText(env, text, rows, maxRows, requestId);
+		logSearchStreamOutcome(env, {
+			customerId: cid,
+			requestId,
+			rowCount: out.length,
+			parseContext: "noReadableBody",
+		});
+		return out;
 	}
 
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
+	let totalBytes = 0;
+	let nonemptyLineCount = 0;
+	let jsonParseFailures = 0;
+	let firstInvalidLine: string | undefined;
+	let firstParsedValue: unknown;
+	let rawPreview = "";
 
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
+			if (value) {
+				totalBytes += value.byteLength;
+				const chunk = decoder.decode(value, { stream: true });
+				if (rawPreview.length < SEARCH_STREAM_RAW_PREVIEW_MAX) {
+					rawPreview += chunk.slice(0, SEARCH_STREAM_RAW_PREVIEW_MAX - rawPreview.length);
+				}
+				buffer += chunk;
+			}
 			const lines = buffer.split("\n");
 			buffer = lines.pop() ?? "";
 			for (const line of lines) {
 				const trimmed = line.trim();
 				if (!trimmed) continue;
+				nonemptyLineCount++;
 				try {
-					if (appendSearchStreamRows(JSON.parse(trimmed), rows, maxRows)) return rows;
+					const parsed = JSON.parse(trimmed);
+					if (firstParsedValue === undefined) firstParsedValue = parsed;
+					if (appendSearchStreamRows(parsed, rows, maxRows)) {
+						logSearchStreamOutcome(env, {
+							customerId: cid,
+							requestId,
+							rowCount: rows.length,
+							parseContext: "streamEarlyCap",
+							totalBytes,
+							nonemptyLineCount,
+							jsonParseFailures,
+						});
+						return rows;
+					}
 				} catch {
-					// ignore partial line
+					jsonParseFailures++;
+					if (firstInvalidLine === undefined) firstInvalidLine = trimmed.slice(0, 400);
 				}
 			}
 		}
 		if (buffer.trim()) {
+			nonemptyLineCount++;
 			try {
-				if (appendSearchStreamRows(JSON.parse(buffer.trim()), rows, maxRows)) return rows;
+				const parsed = JSON.parse(buffer.trim());
+				if (firstParsedValue === undefined) firstParsedValue = parsed;
+				appendSearchStreamRows(parsed, rows, maxRows);
 			} catch {
-				// ignore
+				jsonParseFailures++;
+				if (firstInvalidLine === undefined) firstInvalidLine = buffer.trim().slice(0, 400);
 			}
 		}
 	} finally {
 		reader.releaseLock();
 	}
 
+	logSearchStreamOutcome(env, {
+		customerId: cid,
+		requestId,
+		rowCount: rows.length,
+		parseContext: "streamComplete",
+		totalBytes,
+		nonemptyLineCount,
+		jsonParseFailures,
+		firstInvalidLine,
+		firstParsedTopKeys:
+			firstParsedValue !== undefined && typeof firstParsedValue === "object" && firstParsedValue !== null
+				? Object.keys(firstParsedValue as object).slice(0, 25)
+				: firstParsedValue === undefined
+					? undefined
+					: typeof firstParsedValue,
+		rawPreview: rows.length === 0 ? rawPreview : undefined,
+	});
+
 	return rows;
 }
 
-function parseSearchStreamText(text: string, rows: unknown[], maxRows: number): unknown[] {
+function logSearchStreamOutcome(
+	env: Env,
+	info: {
+		customerId: string;
+		requestId?: string;
+		rowCount: number;
+		parseContext: string;
+		totalBytes?: number;
+		nonemptyLineCount?: number;
+		jsonParseFailures?: number;
+		firstInvalidLine?: string;
+		firstParsedTopKeys?: string[] | string;
+		rawPreview?: string;
+	},
+): void {
+	if (!isGoogleAdsDebugEnabled(env)) return;
+	const base: Record<string, unknown> = {
+		customerId: info.customerId,
+		requestId: info.requestId,
+		rowCount: info.rowCount,
+		parseContext: info.parseContext,
+	};
+	if (info.totalBytes !== undefined) base.totalBytesDecoded = info.totalBytes;
+	if (info.nonemptyLineCount !== undefined) base.nonemptyJsonLines = info.nonemptyLineCount;
+	if (info.jsonParseFailures !== undefined) base.jsonParseFailures = info.jsonParseFailures;
+	if (info.firstInvalidLine !== undefined) base.firstInvalidLineSample = info.firstInvalidLine;
+	if (info.firstParsedTopKeys !== undefined) base.firstParsedValueKeysOrType = info.firstParsedTopKeys;
+	console.warn("[google-ads-api] searchStream parse summary", base);
+	if (info.rowCount === 0 && info.rawPreview !== undefined && info.rawPreview.length > 0) {
+		console.warn("[google-ads-api] searchStream raw body preview (truncated, for empty parse)", {
+			length: info.rawPreview.length,
+			preview: info.rawPreview.slice(0, SEARCH_STREAM_RAW_PREVIEW_MAX),
+		});
+	}
+}
+
+function parseSearchStreamText(
+	env: Env,
+	text: string,
+	rows: unknown[],
+	maxRows: number,
+	requestId?: string,
+): unknown[] {
 	const trimmed = text.trim();
-	if (!trimmed) return rows;
+	if (!trimmed) {
+		adsDebug(env, "parseSearchStreamText: empty body text", { requestId });
+		return rows;
+	}
 	try {
 		appendSearchStreamRows(JSON.parse(trimmed), rows, maxRows);
 	} catch {
@@ -229,7 +387,7 @@ function parseSearchStreamText(text: string, rows: unknown[], maxRows: number): 
 			const t = line.trim();
 			if (!t) continue;
 			try {
-				if (appendSearchStreamRows(JSON.parse(t), rows, maxRows)) return rows;
+				if (appendSearchStreamRows(JSON.parse(t), rows, maxRows)) break;
 			} catch {
 				// skip
 			}
@@ -310,6 +468,11 @@ export async function fetchCustomerClients(
 	const streamLogin = options.loginCustomerId?.replace(/\D/g, "")
 		? { loginCustomerId: normalizeCustomerId(options.loginCustomerId) }
 		: { loginCustomerId: normalizeCustomerId(managerCustomerId) };
+	adsDebug(env, "fetchCustomerClients GAQL", {
+		managerCustomerId: normalizeCustomerId(managerCustomerId),
+		query,
+		streamLoginCustomerId: streamLogin.loginCustomerId,
+	});
 	return searchStreamCollect(env, accessToken, normalizeCustomerId(managerCustomerId), query, {
 		maxRows: cap,
 		...streamLogin,
