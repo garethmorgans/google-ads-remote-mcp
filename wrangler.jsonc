@@ -35,4 +35,8 @@
 	"observability": {
 		"enabled": true,
 	},
+	// Mirrors Workers dashboard → Settings → Variables. Set to "0" or remove to silence Ads API debug logs.
+	"vars": {
+		"GOOGLE_ADS_DEBUG": "1",
+	},
 }
