@@ -20,11 +20,22 @@ export function isGoogleAdsDebugEnabled(env: Env): boolean {
 
 function adsDebug(env: Env, message: string, data?: Record<string, unknown>): void {
 	if (!isGoogleAdsDebugEnabled(env)) return;
+	// Single string so Cloudflare Workers logs / tail show the full payload (multi-arg often loses objects in the UI).
 	if (data !== undefined) {
-		console.warn(`[google-ads-api] ${message}`, data);
+		console.warn(`[google-ads-api] ${message} ${JSON.stringify(data)}`);
 	} else {
 		console.warn(`[google-ads-api] ${message}`);
 	}
+}
+
+/** Google Ads API returns request id in headers (casing varies by layer). */
+function responseRequestId(response: Response): string | undefined {
+	return (
+		response.headers.get("request-id") ??
+		response.headers.get("Request-Id") ??
+		response.headers.get("x-request-id") ??
+		undefined
+	);
 }
 
 export type ListAccessibleCustomersResponse = {
@@ -147,7 +158,7 @@ export async function listAccessibleCustomers(
 	const names = payload.resourceNames ?? [];
 	adsDebug(env, "listAccessibleCustomers ok", {
 		status: response.status,
-		requestId: response.headers.get("request-id") ?? undefined,
+		requestId: responseRequestId(response),
 		count: names.length,
 		sample: names.slice(0, 8),
 	});
@@ -211,7 +222,7 @@ export async function searchStreamCollect(
 		body: JSON.stringify({ query }),
 	});
 
-	const requestId = response.headers.get("request-id") ?? undefined;
+	const requestId = responseRequestId(response);
 	adsDebug(env, "searchStream response headers", {
 		ok: response.ok,
 		status: response.status,
@@ -221,11 +232,13 @@ export async function searchStreamCollect(
 
 	if (!response.ok) {
 		const text = await response.text();
-		console.warn("[google-ads-api] searchStream HTTP error", {
-			status: response.status,
-			requestId,
-			bodyPreview: text.slice(0, 2000),
-		});
+		console.warn(
+			`[google-ads-api] searchStream HTTP error ${JSON.stringify({
+				status: response.status,
+				requestId,
+				bodyPreview: text.slice(0, 2000),
+			})}`,
+		);
 		throw new Error(`Google Ads searchStream failed (${response.status}): ${text}`);
 	}
 
@@ -359,12 +372,14 @@ function logSearchStreamOutcome(
 	if (info.jsonParseFailures !== undefined) base.jsonParseFailures = info.jsonParseFailures;
 	if (info.firstInvalidLine !== undefined) base.firstInvalidLineSample = info.firstInvalidLine;
 	if (info.firstParsedTopKeys !== undefined) base.firstParsedValueKeysOrType = info.firstParsedTopKeys;
-	console.warn("[google-ads-api] searchStream parse summary", base);
+	console.warn(`[google-ads-api] searchStream parse summary ${JSON.stringify(base)}`);
 	if (info.rowCount === 0 && info.rawPreview !== undefined && info.rawPreview.length > 0) {
-		console.warn("[google-ads-api] searchStream raw body preview (truncated, for empty parse)", {
-			length: info.rawPreview.length,
-			preview: info.rawPreview.slice(0, SEARCH_STREAM_RAW_PREVIEW_MAX),
-		});
+		console.warn(
+			`[google-ads-api] searchStream raw body preview (empty parse) ${JSON.stringify({
+				length: info.rawPreview.length,
+				preview: info.rawPreview.slice(0, SEARCH_STREAM_RAW_PREVIEW_MAX),
+			})}`,
+		);
 	}
 }
 

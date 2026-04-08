@@ -45,7 +45,9 @@ Optional env: `ALLOWED_EMAIL_DOMAIN`, `HOSTED_DOMAIN`
 
 ### Debugging Google Ads API calls
 
-Set **`GOOGLE_ADS_DEBUG`** to `1` or `true` (Worker **Variables** in the Cloudflare dashboard, or `.dev.vars` for `wrangler dev`). The Worker will log **diagnostics only**—URLs, resolved `login-customer-id`, query previews, response `request-id`, stream byte counts, JSON line parse stats, and (when rows parse as empty) a **truncated raw response body preview**. Access tokens are **never** logged. Inspect logs under **Workers** → your worker → **Logs** (or `wrangler tail`).
+Set **`GOOGLE_ADS_DEBUG`** to `1` or `true` (Worker **Variables** in the Cloudflare dashboard, or `.dev.vars` for `wrangler dev`). The Worker will log **diagnostics only**—URLs, resolved `login-customer-id`, query previews, response `request-id`, stream byte counts, JSON line parse stats, and (when rows parse as empty) a **truncated raw response body preview**. Access tokens are **never** logged. Messages are **one line each** with JSON payloads so they show up fully in the dashboard.
+
+MCP tool calls run on the **Durable Object** (`MyMCP`). In **Workers** → **Logs**, include invocations for the Durable Object (not only the entry Worker) when tailing, or run `wrangler tail` and trigger `list_customer_clients` / `gaql_search` to see `[google-ads-api] …` lines.
 
 ## Secrets
 
