@@ -282,46 +282,26 @@ export async function searchStreamCollect(
 				}
 				buffer += chunk;
 			}
-			const lines = buffer.split("\n");
-			buffer = lines.pop() ?? "";
-			for (const line of lines) {
-				const trimmed = line.trim();
-				if (!trimmed) continue;
-				nonemptyLineCount++;
-				try {
-					const parsed = JSON.parse(trimmed);
-					if (firstParsedValue === undefined) firstParsedValue = parsed;
-					if (appendSearchStreamRows(parsed, rows, maxRows)) {
-						logSearchStreamOutcome(env, {
-							customerId: cid,
-							requestId,
-							rowCount: rows.length,
-							parseContext: "streamEarlyCap",
-							totalBytes,
-							nonemptyLineCount,
-							jsonParseFailures,
-						});
-						return rows;
-					}
-				} catch {
-					jsonParseFailures++;
-					if (firstInvalidLine === undefined) firstInvalidLine = trimmed.slice(0, 400);
-				}
-			}
-		}
-		if (buffer.trim()) {
-			nonemptyLineCount++;
-			try {
-				const parsed = JSON.parse(buffer.trim());
-				if (firstParsedValue === undefined) firstParsedValue = parsed;
-				appendSearchStreamRows(parsed, rows, maxRows);
-			} catch {
-				jsonParseFailures++;
-				if (firstInvalidLine === undefined) firstInvalidLine = buffer.trim().slice(0, 400);
-			}
 		}
 	} finally {
 		reader.releaseLock();
+	}
+
+	// Google Ads REST often returns pretty-printed JSON arrays for searchStream.
+	// Parse the full buffered payload first; fallback logic inside parseSearchStreamText
+	// handles NDJSON/newline variants.
+	const trimmed = buffer.trim();
+	if (trimmed) {
+		nonemptyLineCount = trimmed.split("\n").filter((line) => line.trim().length > 0).length;
+		try {
+			const parsed = JSON.parse(trimmed);
+			firstParsedValue = parsed;
+			appendSearchStreamRows(parsed, rows, maxRows);
+		} catch {
+			jsonParseFailures = 1;
+			firstInvalidLine = trimmed.slice(0, 400);
+			parseSearchStreamText(env, trimmed, rows, maxRows, requestId);
+		}
 	}
 
 	logSearchStreamOutcome(env, {
