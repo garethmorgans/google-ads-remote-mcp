@@ -49,6 +49,22 @@ Set **`GOOGLE_ADS_DEBUG`** to `1` or `true` (Worker **Variables** in the Cloudfl
 
 MCP tool calls run on the **Durable Object** (`MyMCP`). In **Workers** → **Logs**, include invocations for the Durable Object (not only the entry Worker) when tailing, or run `wrangler tail` and trigger `list_customer_clients` / `gaql_search` to see `[google-ads-api] …` lines.
 
+`GOOGLE_ADS_DEBUG` is enabled in [`wrangler.jsonc`](wrangler.jsonc) (`vars`) so production tails show these lines without extra dashboard setup. Set it to `0` or remove it when you no longer need verbose Ads logs.
+
+### Pitfall: `searchStream` and pretty-printed JSON
+
+Google Ads **REST** `googleAds:searchStream` can return a **single JSON value** (often a top-level **array** of chunks) that is **pretty-printed** across many lines—e.g. `[{`, newline, `"results":`, …, `customerClient`, ….
+
+If the client tries to **`JSON.parse` each line** as its own document, **every line fails** (a line like `[{` or `"results": [` is not valid JSON on its own). Symptoms:
+
+- HTTP **200** and real data in **`wrangler tail`** / raw body preview
+- Tool result **`row_count`: 0** and **`rows`: []**
+- Debug summary with **`jsonParseFailures`** matching the number of non-empty lines, and **`firstInvalidLineSample`** looking like `[{`
+
+**Fix (implemented in this repo):** after reading the full response body, **`JSON.parse` the entire buffered string** first, then walk the parsed structure (including nested `results` arrays). Only fall back to **line-by-line** parsing for true **NDJSON** streams.
+
+For large responses, prefer relying on this full-body parse; the official [Search & SearchStream](https://developers.google.com/google-ads/api/rest/common/search) docs describe the wrapped-array shape for REST `searchStream`.
+
 ## Secrets
 
 ```bash
