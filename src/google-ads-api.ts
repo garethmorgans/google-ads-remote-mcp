@@ -238,6 +238,26 @@ function parseSearchStreamText(text: string, rows: unknown[], maxRows: number): 
 	return rows;
 }
 
+/** Chunks that are not GoogleAdsRow payloads (REST stream metadata). */
+const STREAM_METADATA_KEYS = new Set([
+	"fieldMask",
+	"requestId",
+	"queryResourceConsumption",
+	"summaryRow",
+	"metricAttributes",
+]);
+
+function looksLikeGoogleAdsRowChunk(obj: Record<string, unknown>): boolean {
+	const keys = Object.keys(obj).filter((k) => !STREAM_METADATA_KEYS.has(k));
+	if (keys.length === 0) return false;
+	// Bare row: at least one nested message (resource or metrics) from the SELECT.
+	for (const k of keys) {
+		const v = obj[k];
+		if (v !== null && typeof v === "object") return true;
+	}
+	return false;
+}
+
 function appendSearchStreamRows(parsed: unknown, rows: unknown[], maxRows: number): boolean {
 	// REST searchStream wraps chunks in a JSON array, e.g. [{ results: [...] }, ...].
 	if (Array.isArray(parsed)) {
@@ -248,10 +268,17 @@ function appendSearchStreamRows(parsed: unknown, rows: unknown[], maxRows: numbe
 	}
 	if (!parsed || typeof parsed !== "object") return rows.length >= maxRows;
 	const envelope = parsed as { results?: unknown[] };
-	if (!Array.isArray(envelope.results)) return rows.length >= maxRows;
-	for (const r of envelope.results) {
-		rows.push(r);
-		if (rows.length >= maxRows) return true;
+	if (Array.isArray(envelope.results)) {
+		for (const r of envelope.results) {
+			rows.push(r);
+			if (rows.length >= maxRows) return true;
+		}
+		return false;
+	}
+	// Some streams emit a bare GoogleAdsRow per line (not wrapped in `results`).
+	if (looksLikeGoogleAdsRowChunk(envelope as Record<string, unknown>)) {
+		rows.push(envelope);
+		return rows.length >= maxRows;
 	}
 	return false;
 }
@@ -275,9 +302,10 @@ export async function fetchCustomerClients(
 	const cap = Math.min(options.maxRows ?? CUSTOMER_CLIENT_MAX_ROWS, CUSTOMER_CLIENT_MAX_ROWS);
 	const fields =
 		"customer_client.client_customer, customer_client.level, customer_client.manager, customer_client.descriptive_name, customer_client.currency_code, customer_client.time_zone, customer_client.id, customer_client.status, customer_client.resource_name";
-	let query = `SELECT ${fields} FROM customer_client`;
+	// Match Google’s hierarchy examples: direct links under this manager (level 0 = root, 1 = children).
+	let query = `SELECT ${fields} FROM customer_client WHERE customer_client.level <= 1`;
 	if (options.onlyLeafAccounts) {
-		query += " WHERE customer_client.manager = FALSE";
+		query += " AND customer_client.manager = FALSE";
 	}
 	const streamLogin = options.loginCustomerId?.replace(/\D/g, "")
 		? { loginCustomerId: normalizeCustomerId(options.loginCustomerId) }

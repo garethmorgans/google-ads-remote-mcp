@@ -146,6 +146,21 @@ describe("searchStreamCollect", () => {
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
+
+	it("parses newline-delimited bare GoogleAdsRow chunks (REST)", async () => {
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					'{"customerClient":{"id":"1","level":"1","manager":false}}\n{"customerClient":{"id":"2","level":"1","manager":false}}\n',
+					{ status: 200 },
+				),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const rows = await searchStreamCollect(env, "tok", "123", "SELECT ... FROM customer_client", {
+			maxRows: 10,
+		});
+		expect(rows).toHaveLength(2);
+	});
 });
 
 describe("fetchCustomerClients", () => {

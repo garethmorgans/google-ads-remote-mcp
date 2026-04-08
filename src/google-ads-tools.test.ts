@@ -4,10 +4,10 @@ import * as api from "./google-ads-api";
 import { registerGoogleAdsTools } from "./google-ads-tools";
 
 type RegisteredTool = { handler: (args: unknown, extra: unknown) => Promise<unknown> };
-type McpWithTools = McpServer & { _registeredTools: Record<string, RegisteredTool> };
+type ServerWithTools = { _registeredTools: Record<string, RegisteredTool> };
 
 function getTool(server: McpServer, name: string): RegisteredTool {
-	return (server as McpWithTools)._registeredTools[name];
+	return (server as unknown as ServerWithTools)._registeredTools[name];
 }
 
 describe("registerGoogleAdsTools", () => {
@@ -25,7 +25,7 @@ describe("registerGoogleAdsTools", () => {
 	it("registers exactly three tools", () => {
 		const server = new McpServer({ name: "t", version: "1" });
 		registerGoogleAdsTools(server, env);
-		const names = Object.keys((server as McpWithTools)._registeredTools);
+		const names = Object.keys((server as unknown as ServerWithTools)._registeredTools);
 		expect(names.sort()).toEqual([
 			"gaql_search",
 			"list_accessible_customers",
