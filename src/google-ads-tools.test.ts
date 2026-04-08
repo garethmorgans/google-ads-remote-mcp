@@ -22,15 +22,29 @@ describe("registerGoogleAdsTools", () => {
 		vi.spyOn(api, "getGoogleAdsAccessTokenFromContext").mockResolvedValue("tok");
 	});
 
-	it("registers exactly three tools", () => {
+	const EXPECTED_TOOL_NAMES = [
+		"gaql_search",
+		"get_account_metrics",
+		"get_ad_group_metrics",
+		"get_campaign_metrics",
+		"get_change_events",
+		"get_customer",
+		"get_device_segment_metrics",
+		"get_geo_metrics",
+		"get_keyword_metrics",
+		"get_search_terms",
+		"list_accessible_customers",
+		"list_ads",
+		"list_campaign_budgets",
+		"list_conversion_actions",
+		"list_customer_clients",
+	];
+
+	it("registers all expected tools", () => {
 		const server = new McpServer({ name: "t", version: "1" });
 		registerGoogleAdsTools(server, env);
 		const names = Object.keys((server as unknown as ServerWithTools)._registeredTools);
-		expect(names.sort()).toEqual([
-			"gaql_search",
-			"list_accessible_customers",
-			"list_customer_clients",
-		]);
+		expect(names.sort()).toEqual([...EXPECTED_TOOL_NAMES].sort());
 	});
 
 	it("list_accessible_customers returns ids when ids_only", async () => {
@@ -87,6 +101,45 @@ describe("registerGoogleAdsTools", () => {
 			"1234567890",
 			"SELECT campaign.id FROM campaign",
 			expect.any(Object),
+		);
+	});
+
+	it("get_account_metrics runs preset GAQL via searchStreamCollect", async () => {
+		const search = vi.spyOn(api, "searchStreamCollect").mockResolvedValue([{ row: 1 }]);
+		const server = new McpServer({ name: "t", version: "1" });
+		registerGoogleAdsTools(server, env);
+		const out = await getTool(server, "get_account_metrics").handler(
+			{ customer_id: "111", date_range: "LAST_7_DAYS" },
+			{},
+		);
+		const text = (out as { content: Array<{ text: string }> }).content[0].text;
+		const payload = JSON.parse(text) as { customer_id: string; row_count: number; date_range: string };
+		expect(payload.customer_id).toBe("111");
+		expect(payload.row_count).toBe(1);
+		expect(payload.date_range).toBe("LAST_7_DAYS");
+		expect(search).toHaveBeenCalledWith(
+			env,
+			"tok",
+			"111",
+			expect.stringContaining("FROM customer"),
+			expect.objectContaining({ maxRows: 10_000 }),
+		);
+	});
+
+	it("get_change_events passes LIMIT-derived maxRows to searchStreamCollect", async () => {
+		const search = vi.spyOn(api, "searchStreamCollect").mockResolvedValue([]);
+		const server = new McpServer({ name: "t", version: "1" });
+		registerGoogleAdsTools(server, env);
+		await getTool(server, "get_change_events").handler(
+			{ customer_id: "222", date_range: "LAST_14_DAYS", limit: 50 },
+			{},
+		);
+		expect(search).toHaveBeenCalledWith(
+			env,
+			"tok",
+			"222",
+			expect.stringContaining("FROM change_event"),
+			expect.objectContaining({ maxRows: 50 }),
 		);
 	});
 });

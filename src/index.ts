@@ -7,7 +7,7 @@ import { registerGoogleAdsTools } from "./google-ads-tools";
 export class MyMCP extends McpAgent {
 	server = new McpServer({
 		name: "Google Ads MCC MCP",
-		version: "2.0.0",
+		version: "2.1.0",
 	});
 
 	async init() {

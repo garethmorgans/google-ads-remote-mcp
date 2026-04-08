@@ -2,15 +2,36 @@
 
 Remote MCP server for **read-only Google Ads** access scoped around a **manager (MCC)** workflow. It uses **MCP OAuth** (Inspector / compatible clients) plus **Google sign-in** with an optional **email domain allowlist** (default `@herdl.com`).
 
-**v2** exposes only three discovery/query tools. Earlier versions included many agency-style helpers; those have been removed for a clean rebuild. Clients that depended on removed tools must migrate to **`gaql_search`** with raw GAQL.
+**v2.1** adds read-only **reporting presets** (typed GAQL) for analysis and dashboards, plus the original discovery tools and **`gaql_search`** for anything not covered. All tools are **read-only** (no mutates). For **multiple client accounts** under an MCC, call reporting tools once per **leaf** `customer_id`; use **`list_customer_clients`** to enumerate clients.
 
 ## Tools
+
+### Discovery
 
 | Tool                            | Purpose                                                                                                                                                                                                                |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`list_accessible_customers`** | Wraps [`customers:listAccessibleCustomers`](https://developers.google.com/google-ads/api/reference/rest/v21/customers/listAccessibleCustomers). Optional `ids_only`, `login_customer_id`, `include_manager_context`.   |
 | **`list_customer_clients`**     | `FROM customer_client` via `googleAds:searchStream` on the manager customer (default: resolved MCC). Optional `manager_customer_id`, `only_leaf_accounts`, `max_rows`. Response includes **`login_customer_id_used`**. |
 | **`gaql_search`**               | Raw GAQL against `customers/{customer_id}/googleAds:searchStream`. Pass numeric `customer_id`, full `query`, optional `max_rows` and `login_customer_id`.                                                              |
+
+### Read-only reporting presets
+
+Each preset takes **`customer_id`** (the account to query) and optional **`login_customer_id`** (manager/MCC for `login-customer-id` when accessing a client). Date-based tools accept **`date_range`**: `LAST_7_DAYS`, `LAST_14_DAYS`, `LAST_30_DAYS`, `THIS_MONTH`, `LAST_MONTH`, `LAST_BUSINESS_WEEK` (same semantics as GAQL `segments.date DURING …`, except **`get_change_events`** which maps the preset to **UTC calendar bounds** on `change_event.change_date_time`).
+
+| Tool                             | Purpose                                                                                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`get_customer`**               | Account metadata from `customer` (name, currency, time zone, manager flag, etc.).                                                                |
+| **`get_account_metrics`**        | Account-level metrics with `segments.date` time series.                                                                                        |
+| **`get_campaign_metrics`**       | Campaign performance; optional `campaign_id`, `campaign_status`.                                                                               |
+| **`get_ad_group_metrics`**       | Ad group performance; optional `campaign_id`, `ad_group_id`.                                                                                 |
+| **`get_keyword_metrics`**        | `keyword_view` keyword metrics; optional `campaign_id`, `ad_group_id`.                                                                       |
+| **`get_search_terms`**           | `search_term_view`; optional `campaign_id`. Lower default **`max_rows`** (5000) than other reports.                                            |
+| **`list_ads`**                   | `ad_group_ad` inventory; optional **`only_responsive_search_ads`**.                                                                          |
+| **`list_conversion_actions`**    | `conversion_action` definitions (non-removed).                                                                                               |
+| **`get_device_segment_metrics`** | `campaign` + `segments.device` + metrics + date range.                                                                                         |
+| **`get_geo_metrics`**            | `geographic_view` + metrics + date range.                                                                                                    |
+| **`get_change_events`**          | `change_event` audit stream; **`limit`** (default 500, max 10000).                                                                             |
+| **`list_campaign_budgets`**      | `campaign_budget` rows with linked campaign fields.                                                                                           |
 
 [`listAccessibleCustomers`](https://developers.google.com/google-ads/api/reference/rpc/google.ads.googleads.v21.services#google.ads.googleads.v21.services.CustomerService.ListAccessibleCustomers) returns accounts the user can reach **directly**. Many **linked client accounts** under an MCC appear only via **`list_customer_clients`** or explicit GAQL to the client id with the correct **`login-customer-id`** header.
 
@@ -101,7 +122,9 @@ npm run deploy
 
 ## Limits
 
-- **`gaql_search`**: default **10,000** rows max per call (`max_rows` capped the same).
+- **Preset reporting tools** and **`gaql_search`**: default **10,000** rows per call unless noted (`max_rows` capped at 10,000).
+- **`get_search_terms`**: default **`max_rows` 5,000** (override up to 10,000 if needed).
+- **`get_change_events`**: **`limit`** default **500**, max **10,000** (stream collection matches GAQL `LIMIT`).
 - **`list_customer_clients`**: cap **25,000** rows.
 - Read-only: no mutate calls.
 
